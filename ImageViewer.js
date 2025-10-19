@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.28
+// @name         Image Fullscreen Toggle v1.30
 // @namespace    http://example.com/
-// @version      1.28
-// @description  Click any image on chatgpt.com or grok.com to zoom+fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com and grok.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.30
+// @description  Click any image on chatgpt.com or grok.com to zoom+fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com and grok.com, disabled on /library and /imagine pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -11,6 +11,8 @@
 // @exclude      *://*.chatgpt.com/library*
 // @exclude      *://grok.com/library*
 // @exclude      *://*.grok.com/library*
+// @exclude      *://grok.com/imagine*
+// @exclude      *://*.grok.com/imagine*
 // @grant        none
 // @run-at       document-start
 //
@@ -78,7 +80,8 @@
                 imgs.push(imgEl);
             }
         }
-        currentIndex = imgs.indexOf(img);
+        // Find index by src, not by element reference
+        currentIndex = imgs.findIndex(imgEl => imgEl.src === img.src);
         if (currentIndex < 0) currentIndex = 0;
 
         // Enter browser fullscreen
