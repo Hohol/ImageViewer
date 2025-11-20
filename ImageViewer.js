@@ -1,12 +1,13 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.31
+// @name         Image Fullscreen Toggle v1.32
 // @namespace    http://example.com/
-// @version      1.31
-// @description  Click any image on chatgpt.com or grok.com to zoom+fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com and grok.com, disabled on /library and /imagine pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.32
+// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library and /imagine pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
 // @match        *://*.grok.com/*
+// @match        *://gemini.google.com/*
 // @exclude      *://chatgpt.com/library*
 // @exclude      *://*.chatgpt.com/library*
 // @exclude      *://grok.com/library*
@@ -103,7 +104,31 @@
 
         // Display image
         overlayImage = img.cloneNode();
-        Object.assign(overlayImage.style, { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' });
+        
+        // For Google Images (like Gemini), remove size restrictions from URL
+        let fullSizeSrc = img.src;
+        if (fullSizeSrc.includes('googleusercontent.com') || fullSizeSrc.includes('ggpht.com')) {
+            // Remove size parameters like =s1024-rj or =w500-h400 to get original size
+            fullSizeSrc = fullSizeSrc.replace(/=[swh]\d+(-\w+)?$/i, '=s0');
+        }
+        
+        // Remove all classes that might have size restrictions
+        overlayImage.removeAttribute('class');
+        overlayImage.removeAttribute('_ngcontent-ng-c1355997682');
+        overlayImage.removeAttribute('loading');
+        
+        // Set the full-size src
+        overlayImage.src = fullSizeSrc;
+        
+        // Set aggressive inline styles to ensure full size display
+        Object.assign(overlayImage.style, { 
+            maxWidth: '100%', 
+            maxHeight: '100%', 
+            width: 'auto',
+            height: 'auto',
+            objectFit: 'contain' 
+        });
+        
         overlay.appendChild(overlayImage);
 
         // Navigation buttons
