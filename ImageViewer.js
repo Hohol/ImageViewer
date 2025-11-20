@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.30
+// @name         Image Fullscreen Toggle v1.31
 // @namespace    http://example.com/
-// @version      1.30
+// @version      1.31
 // @description  Click any image on chatgpt.com or grok.com to zoom+fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com and grok.com, disabled on /library and /imagine pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -27,11 +27,14 @@
     let currentIndex = -1;
     let overlayImage = null;
 
-    // Check if image should be skipped from navigation (avatars, etc.)
+    // Check if image should be skipped from navigation (avatars, previews, etc.)
     function shouldSkipImage(img) {
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
-        return alt === 'User' || alt === 'pfp';
+        if (alt === 'User' || alt === 'pfp') return true;
+        // Skip preview images (URLs ending with /preview-image)
+        if (img.src.endsWith('/preview-image')) return true;
+        return false;
     }
 
     // Exclude certain images and generated-image blocks on initial click
