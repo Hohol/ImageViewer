@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.32
+// @name         Image Fullscreen Toggle v1.34
 // @namespace    http://example.com/
-// @version      1.32
-// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library and /imagine pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.34
+// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F to fullscreen videos; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -12,8 +12,6 @@
 // @exclude      *://*.chatgpt.com/library*
 // @exclude      *://grok.com/library*
 // @exclude      *://*.grok.com/library*
-// @exclude      *://grok.com/imagine*
-// @exclude      *://*.grok.com/imagine*
 // @grant        none
 // @run-at       document-start
 //
@@ -193,4 +191,67 @@
         if (overlay && !document.fullscreenElement && !document.webkitFullscreenElement &&
             !document.mozFullScreenElement && !document.msFullscreenElement) clearOverlay();
     }));
+
+    // === VIDEO FULLSCREEN FUNCTIONALITY ===
+    
+    // Toggle fullscreen for video element
+    function toggleVideoFullscreen(video) {
+        const doc = document;
+        const isFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement || 
+                           doc.mozFullScreenElement || doc.msFullscreenElement;
+        
+        if (isFullscreen) {
+            // Exit fullscreen
+            const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || 
+                          doc.mozCancelFullScreen || doc.msExitFullscreen;
+            if (exitFn) exitFn.call(doc);
+        } else {
+            // Enter fullscreen
+            // Store original styles to restore later
+            if (!video.dataset.originalStyle) {
+                video.dataset.originalStyle = video.style.cssText;
+            }
+            
+            // Apply styles for proper fullscreen display
+            Object.assign(video.style, {
+                objectFit: 'contain',
+                width: '100%',
+                height: '100%',
+                maxWidth: '100vw',
+                maxHeight: '100vh'
+            });
+            
+            const requestFn = video.requestFullscreen || video.webkitRequestFullscreen || 
+                            video.mozRequestFullScreen || video.msRequestFullscreen;
+            if (requestFn) requestFn.call(video);
+        }
+    }
+    
+    // Restore original video styles when exiting fullscreen
+    ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
+    .forEach(evt => document.addEventListener(evt, () => {
+        const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement ||
+                           document.mozFullScreenElement || document.msFullscreenElement;
+        
+        if (!isFullscreen) {
+            // Exited fullscreen - restore original styles
+            const videos = document.querySelectorAll('video[data-original-style]');
+            videos.forEach(video => {
+                video.style.cssText = video.dataset.originalStyle;
+                delete video.dataset.originalStyle;
+            });
+        }
+    }));
+
+    // Alt+F / Option+F keyboard shortcut for video fullscreen
+    document.addEventListener('keydown', e => {
+        // Use e.code to detect physical key, not e.key (which gives ÷ on Mac with Alt+F)
+        if (e.altKey && e.code === 'KeyF') {
+            e.preventDefault();
+            const video = document.querySelector('video');
+            if (video) {
+                toggleVideoFullscreen(video);
+            }
+        }
+    });
 })();
