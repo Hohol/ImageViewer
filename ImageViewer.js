@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.34
+// @name         Image Fullscreen Toggle v1.36
 // @namespace    http://example.com/
-// @version      1.34
+// @version      1.36
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F to fullscreen videos; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -31,6 +31,8 @@
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
         if (alt === 'User' || alt === 'pfp') return true;
+        // Skip generated image previews in masonry grid
+        if (alt === 'Generated image') return true;
         // Skip preview images (URLs ending with /preview-image)
         if (img.src.endsWith('/preview-image')) return true;
         return false;
@@ -40,6 +42,8 @@
     function isExcludedImage(img) {
         if (shouldSkipImage(img)) return true;
         if (img.closest('div.flex.flex-col.gap-2')) return true;
+        // Skip thumbnail images in Favorites button
+        if (img.closest('button[aria-label="Favorites"]')) return true;
         return false;
     }
 
