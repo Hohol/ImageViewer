@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.36
+// @name         Image Fullscreen Toggle v1.37
 // @namespace    http://example.com/
-// @version      1.36
-// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F to fullscreen videos; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.37
+// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -211,38 +211,135 @@
             if (exitFn) exitFn.call(doc);
         } else {
             // Enter fullscreen
-            // Store original styles to restore later
-            if (!video.dataset.originalStyle) {
-                video.dataset.originalStyle = video.style.cssText;
-            }
-            
-            // Apply styles for proper fullscreen display
-            Object.assign(video.style, {
-                objectFit: 'contain',
-                width: '100%',
-                height: '100%',
-                maxWidth: '100vw',
-                maxHeight: '100vh'
-            });
-            
             const requestFn = video.requestFullscreen || video.webkitRequestFullscreen || 
                             video.mozRequestFullScreen || video.msRequestFullscreen;
             if (requestFn) requestFn.call(video);
         }
     }
     
-    // Restore original video styles when exiting fullscreen
+    // Create fullscreen button for a video
+    function createFullscreenButton(video) {
+        // Check if button already exists
+        if (video.dataset.hasFullscreenButton) return;
+        video.dataset.hasFullscreenButton = 'true';
+        
+        const button = document.createElement('button');
+        button.innerHTML = '⛶'; // Fullscreen icon
+        button.title = 'Fullscreen (Alt+F)';
+        Object.assign(button.style, {
+            position: 'absolute',
+            bottom: '10px',
+            right: '10px',
+            width: '40px',
+            height: '40px',
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '20px',
+            cursor: 'pointer',
+            zIndex: 2147483647,
+            opacity: '0',
+            transition: 'opacity 0.2s, background-color 0.2s',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+        });
+        
+        // Show button on video hover
+        const videoContainer = video.parentElement;
+        if (!videoContainer.style.position || videoContainer.style.position === 'static') {
+            videoContainer.style.position = 'relative';
+        }
+        
+        const showButton = () => button.style.opacity = '1';
+        const hideButton = () => button.style.opacity = '0';
+        
+        videoContainer.addEventListener('mouseenter', showButton);
+        videoContainer.addEventListener('mouseleave', hideButton);
+        
+        // Button hover effect
+        button.addEventListener('mouseenter', () => {
+            button.style.backgroundColor = 'rgba(0,0,0,0.8)';
+        });
+        button.addEventListener('mouseleave', () => {
+            button.style.backgroundColor = 'rgba(0,0,0,0.6)';
+        });
+        
+        // Click handler
+        button.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            // Use the same logic as Alt+F - find first video
+            const firstVideo = document.querySelector('video');
+            if (firstVideo) {
+                toggleVideoFullscreen(firstVideo);
+            }
+        });
+        
+        videoContainer.appendChild(button);
+    }
+    
+    // Add fullscreen buttons to all videos on the page
+    function addFullscreenButtonsToVideos() {
+        const videos = document.querySelectorAll('video');
+        videos.forEach(video => createFullscreenButton(video));
+    }
+    
+    // Watch for new videos being added to the page
+    const videoObserver = new MutationObserver(() => {
+        addFullscreenButtonsToVideos();
+    });
+    
+    // Start observing when DOM is ready
+    if (document.body) {
+        addFullscreenButtonsToVideos();
+        videoObserver.observe(document.body, { childList: true, subtree: true });
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            addFullscreenButtonsToVideos();
+            videoObserver.observe(document.body, { childList: true, subtree: true });
+        });
+    }
+    
+    // Apply styles to videos when entering fullscreen
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
     .forEach(evt => document.addEventListener(evt, () => {
-        const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement ||
-                           document.mozFullScreenElement || document.msFullscreenElement;
+        const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
+                                 document.mozFullScreenElement || document.msFullscreenElement;
         
-        if (!isFullscreen) {
+        if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
+            // Just entered fullscreen with a video - apply styles
+            const video = fullscreenElement;
+            
+            // Store original styles if not already stored
+            if (!video.dataset.originalStyle) {
+                video.dataset.originalStyle = video.style.cssText;
+                video.dataset.originalClass = video.className;
+            }
+            
+            // Remove classes and apply fullscreen styles
+            video.className = '';
+            Object.assign(video.style, {
+                visibility: 'visible',
+                objectFit: 'contain',
+                width: '100%',
+                height: '100%',
+                maxWidth: '100vw',
+                maxHeight: '100vh',
+                display: 'block',
+                backgroundColor: 'black'
+            });
+        } else if (!fullscreenElement) {
             // Exited fullscreen - restore original styles
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
                 video.style.cssText = video.dataset.originalStyle;
+                if (video.dataset.originalClass) {
+                    video.className = video.dataset.originalClass;
+                }
                 delete video.dataset.originalStyle;
+                delete video.dataset.originalClass;
             });
         }
     }));
