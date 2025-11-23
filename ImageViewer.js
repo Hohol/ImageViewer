@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.41
+// @name         Image Fullscreen Toggle v1.42
 // @namespace    http://example.com/
-// @version      1.41
-// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.42
+// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -362,6 +362,22 @@
             const video = document.querySelector('video');
             if (video) {
                 toggleVideoFullscreen(video);
+            }
+        }
+        
+        // Spacebar to pause/unpause video when in fullscreen
+        if (e.code === 'Space') {
+            const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
+                                     document.mozFullScreenElement || document.msFullscreenElement;
+            
+            if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
+                e.preventDefault();
+                const video = fullscreenElement;
+                if (video.paused) {
+                    video.play().catch(err => console.error('Video play failed:', err));
+                } else {
+                    video.pause();
+                }
             }
         }
     });
