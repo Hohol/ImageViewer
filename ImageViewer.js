@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.42
+// @name         Image Fullscreen Toggle v1.43
 // @namespace    http://example.com/
-// @version      1.42
-// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.43
+// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -378,6 +378,19 @@
                 } else {
                     video.pause();
                 }
+            }
+        }
+        
+        // Up/Down arrows to change volume when video is in fullscreen
+        if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+            const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
+                                     document.mozFullScreenElement || document.msFullscreenElement;
+            
+            if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
+                e.preventDefault();
+                const video = fullscreenElement;
+                const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
+                video.volume = Math.max(0, Math.min(1, video.volume + delta));
             }
         }
     });
