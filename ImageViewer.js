@@ -391,6 +391,10 @@
                 const video = fullscreenElement;
                 const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
                 video.volume = Math.max(0, Math.min(1, video.volume + delta));
+                // Unmute if currently muted
+                if (video.muted) {
+                    video.muted = false;
+                }
             }
         }
     });
