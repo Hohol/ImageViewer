@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.44
+// @name         Image Fullscreen Toggle v1.45
 // @namespace    http://example.com/
-// @version      1.44
+// @version      1.45
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -26,7 +26,12 @@
         // Don't run on pages that are just a single image or video (Open in New Tab)
         if (document.body.children.length === 1) {
             const onlyChild = document.body.children[0];
-            if (onlyChild.tagName === 'IMG' || onlyChild.tagName === 'VIDEO') {
+            if (onlyChild.tagName === 'IMG') {
+                return;
+            }
+            if (onlyChild.tagName === 'VIDEO') {
+                // Make video loop on video-only pages
+                onlyChild.loop = true;
                 return;
             }
         }
