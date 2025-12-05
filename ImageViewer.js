@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.45
+// @name         Image Fullscreen Toggle v1.46
 // @namespace    http://example.com/
-// @version      1.45
+// @version      1.46
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -86,6 +86,8 @@
 
     function navigate(delta) {
         currentIndex = (currentIndex + delta + imgs.length) % imgs.length;
+        // Reset aspect-ratio before changing src to ensure proper display
+        overlayImage.style.aspectRatio = 'auto';
         overlayImage.src = imgs[currentIndex].src;
     }
 
@@ -145,7 +147,8 @@
             maxHeight: '100%', 
             width: 'auto',
             height: 'auto',
-            objectFit: 'contain' 
+            objectFit: 'contain',
+            aspectRatio: 'auto'  // Reset aspect-ratio to prevent inherited constraints
         });
         
         overlay.appendChild(overlayImage);
