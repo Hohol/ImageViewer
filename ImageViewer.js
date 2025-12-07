@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.46
+// @name         Image Fullscreen Toggle v1.48
 // @namespace    http://example.com/
-// @version      1.46
+// @version      1.48
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -73,9 +73,46 @@
 
     function hideFullscreen() {
         const doc = document;
-        const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || doc.mozCancelFullScreen || doc.msExitFullscreen;
-        if (exitFn) exitFn.call(doc);
-        clearOverlay();
+        const isFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement || 
+                            doc.mozFullScreenElement || doc.msFullscreenElement;
+        const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || 
+                      doc.mozCancelFullScreen || doc.msExitFullscreen;
+        
+        if (exitFn) {
+            const result = exitFn.call(doc);
+            if (result && result.then) {
+                result.catch(() => {
+                    // Force clear overlay if exit was rejected
+                    clearOverlay();
+                });
+            }
+            // Check after delay if we're visually stuck in fullscreen (browser bug workaround)
+            setTimeout(() => {
+                const stillFs = doc.fullscreenElement || doc.webkitFullscreenElement;
+                const isVisuallyFs = window.innerHeight >= screen.height - 50;
+                if (stillFs && exitFn) {
+                    exitFn.call(doc);
+                }
+                // BROWSER BUG WORKAROUND: When user right-clicks and selects "Copy image" from
+                // the context menu while in fullscreen, the browser decouples the Fullscreen API
+                // state from the actual browser window fullscreen state. The API reports we're not
+                // in fullscreen (fullscreenElement is null), but the browser window remains visually
+                // fullscreen. To fix this, we re-enter fullscreen via the API to re-sync the states,
+                // then immediately exit, which properly exits both API and window fullscreen.
+                if (isVisuallyFs && !stillFs) {
+                    const docEl = document.documentElement;
+                    const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || 
+                                     docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
+                    if (requestFn) {
+                        requestFn.call(docEl).then(() => exitFn.call(doc)).catch(() => {});
+                    }
+                }
+            }, 100);
+        }
+        
+        if (!isFullscreen) {
+            clearOverlay();
+        }
     }
 
     function scrollToImage() {
