@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.49
+// @name         Image Fullscreen Toggle v1.51
 // @namespace    http://example.com/
-// @version      1.49
+// @version      1.51
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -71,47 +71,55 @@
         overlay = null;
     }
 
+    // BROWSER BUG WORKAROUND: When user right-clicks and uses context menu (e.g., "Copy image"
+    // or "Copy video frame") while in fullscreen, the browser decouples the Fullscreen API
+    // state from the actual browser window fullscreen state. The API reports we're not in
+    // fullscreen (fullscreenElement is null), but the browser window remains visually fullscreen.
+    // To fix this, we re-enter fullscreen via the API to re-sync the states, then immediately
+    // exit, which properly exits both API and window fullscreen.
+    function exitFullscreenWithWorkaround(elementForReentry) {
+        const doc = document;
+        const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || 
+                      doc.mozCancelFullScreen || doc.msExitFullscreen;
+        
+        if (!exitFn) return Promise.resolve();
+        
+        const result = exitFn.call(doc);
+        
+        // Check after delay if we're visually stuck in fullscreen
+        setTimeout(() => {
+            const stillFs = doc.fullscreenElement || doc.webkitFullscreenElement;
+            const isVisuallyFs = window.innerHeight >= screen.height - 50;
+            
+            if (stillFs && exitFn) {
+                exitFn.call(doc);
+            }
+            // If visually fullscreen but API says no, re-enter and exit to re-sync
+            if (isVisuallyFs && !stillFs) {
+                const el = elementForReentry || document.documentElement;
+                const requestFn = el.requestFullscreen || el.webkitRequestFullscreen || 
+                                 el.mozRequestFullScreen || el.msRequestFullscreen;
+                if (requestFn) {
+                    requestFn.call(el).then(() => exitFn.call(doc)).catch(() => {});
+                }
+            }
+        }, 100);
+        
+        return result;
+    }
+
     function hideFullscreen() {
         const doc = document;
         const isFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement || 
                             doc.mozFullScreenElement || doc.msFullscreenElement;
-        const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || 
-                      doc.mozCancelFullScreen || doc.msExitFullscreen;
         
-        if (exitFn) {
-            const result = exitFn.call(doc);
-            if (result && result.then) {
-                result.catch(() => {
-                    // Force clear overlay if exit was rejected
-                    clearOverlay();
-                });
-            }
-            // Check after delay if we're visually stuck in fullscreen (browser bug workaround)
-            setTimeout(() => {
-                const stillFs = doc.fullscreenElement || doc.webkitFullscreenElement;
-                const isVisuallyFs = window.innerHeight >= screen.height - 50;
-                if (stillFs && exitFn) {
-                    exitFn.call(doc);
-                }
-                // BROWSER BUG WORKAROUND: When user right-clicks and selects "Copy image" from
-                // the context menu while in fullscreen, the browser decouples the Fullscreen API
-                // state from the actual browser window fullscreen state. The API reports we're not
-                // in fullscreen (fullscreenElement is null), but the browser window remains visually
-                // fullscreen. To fix this, we re-enter fullscreen via the API to re-sync the states,
-                // then immediately exit, which properly exits both API and window fullscreen.
-                if (isVisuallyFs && !stillFs) {
-                    const docEl = document.documentElement;
-                    const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || 
-                                     docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
-                    if (requestFn) {
-                        requestFn.call(docEl).then(() => exitFn.call(doc)).catch(() => {});
-                    }
-                }
-            }, 100);
+        const result = exitFullscreenWithWorkaround();
+        if (result && result.then) {
+            result.catch(() => clearOverlay());
         }
         
         if (!isFullscreen) {
-        clearOverlay();
+            clearOverlay();
         }
     }
 
@@ -262,10 +270,8 @@
                            doc.mozFullScreenElement || doc.msFullscreenElement;
         
         if (isFullscreen) {
-            // Exit fullscreen
-            const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || 
-                          doc.mozCancelFullScreen || doc.msExitFullscreen;
-            if (exitFn) exitFn.call(doc);
+            // Exit fullscreen (pass video element for re-entry workaround)
+            exitFullscreenWithWorkaround(video);
         } else {
             // Enter fullscreen
             const requestFn = video.requestFullscreen || video.webkitRequestFullscreen || 
@@ -359,6 +365,9 @@
         });
     }
     
+    // Track which video is in fullscreen for workaround
+    let lastFullscreenVideo = null;
+    
     // Apply styles to videos when entering fullscreen
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
     .forEach(evt => document.addEventListener(evt, () => {
@@ -368,6 +377,7 @@
         if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
             // Just entered fullscreen with a video - apply styles
             const video = fullscreenElement;
+            lastFullscreenVideo = video; // Track for workaround
             
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
@@ -398,6 +408,26 @@
                 delete video.dataset.originalStyle;
                 delete video.dataset.originalClass;
             });
+            
+            // Apply browser bug workaround for videos (same bug as with images)
+            if (lastFullscreenVideo) {
+                const videoForWorkaround = lastFullscreenVideo;
+                setTimeout(() => {
+                    const stillFs = document.fullscreenElement || document.webkitFullscreenElement;
+                    const isVisuallyFs = window.innerHeight >= screen.height - 50;
+                    
+                    if (isVisuallyFs && !stillFs) {
+                        const requestFn = videoForWorkaround.requestFullscreen || videoForWorkaround.webkitRequestFullscreen || 
+                                         videoForWorkaround.mozRequestFullScreen || videoForWorkaround.msRequestFullscreen;
+                        const exitFn = document.exitFullscreen || document.webkitExitFullscreen || 
+                                      document.mozCancelFullScreen || document.msExitFullscreen;
+                        if (requestFn && exitFn) {
+                            requestFn.call(videoForWorkaround).then(() => exitFn.call(document)).catch(() => {});
+                        }
+                    }
+                }, 100);
+                lastFullscreenVideo = null;
+            }
         }
     }));
 
