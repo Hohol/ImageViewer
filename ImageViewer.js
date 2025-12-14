@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.51
+// @name         Image Fullscreen Toggle v1.52
 // @namespace    http://example.com/
-// @version      1.51
+// @version      1.52
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -254,11 +254,30 @@
         else if (['ArrowLeft', 'Meta', 'Alt'].includes(e.key)) { e.preventDefault(); navigate(-1); }
     });
 
-    // Clear overlay on fullscreen exit
+    // Clear overlay on fullscreen exit (with browser bug workaround)
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
     .forEach(evt => document.addEventListener(evt, () => {
         if (overlay && !document.fullscreenElement && !document.webkitFullscreenElement &&
-            !document.mozFullScreenElement && !document.msFullscreenElement) clearOverlay();
+            !document.mozFullScreenElement && !document.msFullscreenElement) {
+            clearOverlay();
+            
+            // Apply browser bug workaround for images (same as videos)
+            setTimeout(() => {
+                const stillFs = document.fullscreenElement || document.webkitFullscreenElement;
+                const isVisuallyFs = window.innerHeight >= screen.height - 50;
+                
+                if (isVisuallyFs && !stillFs) {
+                    const docEl = document.documentElement;
+                    const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || 
+                                     docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
+                    const exitFn = document.exitFullscreen || document.webkitExitFullscreen || 
+                                  document.mozCancelFullScreen || document.msExitFullscreen;
+                    if (requestFn && exitFn) {
+                        requestFn.call(docEl).then(() => exitFn.call(document)).catch(() => {});
+                    }
+                }
+            }, 100);
+        }
     }));
 
     // === VIDEO FULLSCREEN FUNCTIONALITY ===
