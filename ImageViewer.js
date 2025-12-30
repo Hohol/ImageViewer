@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.52
+// @name         Image Fullscreen Toggle v1.53
 // @namespace    http://example.com/
-// @version      1.52
+// @version      1.53
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -48,6 +48,12 @@
         if (alt === 'User' || alt === 'pfp') return true;
         // Skip preview images (URLs ending with /preview-image)
         if (img.src.endsWith('/preview-image')) return true;
+        // Skip nearly invisible images (loading/transitioning placeholders)
+        const opacity = parseFloat(img.style.opacity);
+        if (!isNaN(opacity) && opacity < 0.5) return true;
+        // Skip blurred background images (decorative backdrops)
+        const parent = img.parentElement;
+        if (parent && parent.classList.contains('blur-2xl')) return true;
         return false;
     }
 
@@ -119,7 +125,7 @@
         }
         
         if (!isFullscreen) {
-            clearOverlay();
+        clearOverlay();
         }
     }
 
@@ -131,9 +137,11 @@
 
     function navigate(delta) {
         currentIndex = (currentIndex + delta + imgs.length) % imgs.length;
+        const imgEl = imgs[currentIndex];
+        
         // Reset aspect-ratio before changing src to ensure proper display
         overlayImage.style.aspectRatio = 'auto';
-        overlayImage.src = imgs[currentIndex].src;
+        overlayImage.src = imgEl.src;
     }
 
     function showFullscreen(img) {
