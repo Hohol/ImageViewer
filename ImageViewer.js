@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.53
+// @name         Image Fullscreen Toggle v1.54
 // @namespace    http://example.com/
-// @version      1.53
+// @version      1.54
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -135,17 +135,48 @@
         setTimeout(() => imgEl?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
     }
 
+    // Convert Google image URL to full-size version
+    function getFullSizeGoogleUrl(src) {
+        if (src.includes('googleusercontent.com') || src.includes('ggpht.com')) {
+            // Remove size parameters like =s1024-rj or =w500-h400 to get original size
+            return src.replace(/=[swh]\d+(-\w+)?$/i, '=s0');
+        }
+        return src;
+    }
+
+    // Display an image in the overlay with progressive loading (low-quality first, then high-quality)
+    function displayImageInOverlay(imgEl) {
+        const lowQualitySrc = imgEl.src;
+        const fullSizeSrc = getFullSizeGoogleUrl(lowQualitySrc);
+        const expectedIndex = currentIndex;
+        
+        // Reset aspect-ratio to prevent inherited constraints
+        overlayImage.style.aspectRatio = 'auto';
+        
+        // Show low-quality immediately, then swap to high-quality when loaded
+        if (fullSizeSrc !== lowQualitySrc) {
+            overlayImage.src = lowQualitySrc;
+            const preloader = new Image();
+            preloader.onload = () => {
+                // Only update if we're still on the same image and overlay exists
+                if (currentIndex === expectedIndex && overlayImage) {
+                    overlayImage.src = fullSizeSrc;
+                }
+            };
+            preloader.src = fullSizeSrc;
+        } else {
+            overlayImage.src = lowQualitySrc;
+        }
+    }
+
     function navigate(delta) {
         currentIndex = (currentIndex + delta + imgs.length) % imgs.length;
-        const imgEl = imgs[currentIndex];
-        
-        // Reset aspect-ratio before changing src to ensure proper display
-        overlayImage.style.aspectRatio = 'auto';
-        overlayImage.src = imgEl.src;
+        displayImageInOverlay(imgs[currentIndex]);
     }
 
     function showFullscreen(img) {
         if (isExcludedImage(img)) return;
+        
         // Build unique image list by src, skipping certain images, include all others
         const allImgs = Array.from(document.querySelectorAll('img'));
         const seen = new Set();
@@ -158,6 +189,7 @@
                 imgs.push(imgEl);
             }
         }
+        
         // Find index by src, not by element reference
         currentIndex = imgs.findIndex(imgEl => imgEl.src === img.src);
         if (currentIndex < 0) currentIndex = 0;
@@ -176,23 +208,13 @@
             zIndex: 2147483647, cursor: 'zoom-out'
         });
 
-        // Display image
+        // Create overlay image element
         overlayImage = img.cloneNode();
         
-        // For Google Images (like Gemini), remove size restrictions from URL
-        let fullSizeSrc = img.src;
-        if (fullSizeSrc.includes('googleusercontent.com') || fullSizeSrc.includes('ggpht.com')) {
-            // Remove size parameters like =s1024-rj or =w500-h400 to get original size
-            fullSizeSrc = fullSizeSrc.replace(/=[swh]\d+(-\w+)?$/i, '=s0');
-        }
-        
-        // Remove all classes that might have size restrictions
+        // Remove all classes/attributes that might have size restrictions
         overlayImage.removeAttribute('class');
         overlayImage.removeAttribute('_ngcontent-ng-c1355997682');
         overlayImage.removeAttribute('loading');
-        
-        // Set the full-size src
-        overlayImage.src = fullSizeSrc;
         
         // Set styles to stretch image to fill screen while maintaining aspect ratio
         Object.assign(overlayImage.style, { 
@@ -200,9 +222,11 @@
             maxHeight: '100%', 
             width: '100%',
             height: '100%',
-            objectFit: 'contain',  // Maintains aspect ratio within the stretched container
-            aspectRatio: 'auto'  // Reset aspect-ratio to prevent inherited constraints
+            objectFit: 'contain'
         });
+        
+        // Display the image with progressive loading
+        displayImageInOverlay(img);
         
         overlay.appendChild(overlayImage);
 
