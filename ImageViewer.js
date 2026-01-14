@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.54
+// @name         Image Fullscreen Toggle v1.55
 // @namespace    http://example.com/
-// @version      1.54
+// @version      1.55
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -430,6 +430,12 @@
             const video = fullscreenElement;
             lastFullscreenVideo = video; // Track for workaround
             
+            // Add keydown listener directly to video element (in case events don't bubble)
+            video.addEventListener('keydown', handleVideoKeydown, true);
+            // Make video focusable and focus it to receive key events
+            video.tabIndex = 0;
+            video.focus();
+            
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
                 video.dataset.originalStyle = video.style.cssText;
@@ -446,12 +452,14 @@
                 maxWidth: '100vw',
                 maxHeight: '100vh',
                 display: 'block',
-                backgroundColor: 'black'
+                backgroundColor: 'black',
+                outline: 'none'  // Remove focus outline
             });
         } else if (!fullscreenElement) {
-            // Exited fullscreen - restore original styles
+            // Exited fullscreen - restore original styles and remove listeners
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
+                video.removeEventListener('keydown', handleVideoKeydown, true);
                 video.style.cssText = video.dataset.originalStyle;
                 if (video.dataset.originalClass) {
                     video.className = video.dataset.originalClass;
@@ -482,24 +490,27 @@
         }
     }));
 
-    // Alt+F / Option+F keyboard shortcut for video fullscreen
-    document.addEventListener('keydown', e => {
+    // Handler for video fullscreen keyboard controls
+    function handleVideoKeydown(e) {
+        const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
+                                 document.mozFullScreenElement || document.msFullscreenElement;
+        
         // Use e.code to detect physical key, not e.key (which gives ÷ on Mac with Alt+F)
         if (e.altKey && e.code === 'KeyF') {
             e.preventDefault();
+            e.stopImmediatePropagation();
             const video = document.querySelector('video');
             if (video) {
                 toggleVideoFullscreen(video);
             }
+            return;
         }
         
         // Spacebar to pause/unpause video when in fullscreen
         if (e.code === 'Space') {
-            const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
-                                     document.mozFullScreenElement || document.msFullscreenElement;
-            
             if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 const video = fullscreenElement;
                 if (video.paused) {
                     video.play().catch(err => console.error('Video play failed:', err));
@@ -507,15 +518,14 @@
                     video.pause();
                 }
             }
+            return;
         }
         
         // Up/Down arrows to change volume when video is in fullscreen
         if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
-            const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
-                                     document.mozFullScreenElement || document.msFullscreenElement;
-            
             if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
                 e.preventDefault();
+                e.stopImmediatePropagation();
                 const video = fullscreenElement;
                 const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
                 video.volume = Math.max(0, Math.min(1, video.volume + delta));
@@ -525,7 +535,11 @@
                 }
             }
         }
-    });
+    }
+    
+    // Listen on both window and document in capture phase
+    window.addEventListener('keydown', handleVideoKeydown, true);
+    document.addEventListener('keydown', handleVideoKeydown, true);
     } // End of init()
     
     // Run init when DOM is ready
