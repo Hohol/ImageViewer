@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.55
+// @name         Image Fullscreen Toggle v1.57
 // @namespace    http://example.com/
-// @version      1.55
+// @version      1.57
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -490,28 +490,46 @@
         }
     }));
 
-    // Handler for video fullscreen keyboard controls
-    function handleVideoKeydown(e) {
+    // Find the target video for keyboard controls
+    // In fullscreen: use the fullscreen video element
+    // Otherwise: use the first video on the page, but only if not typing in a text field
+    function getTargetVideo(e) {
         const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
                                  document.mozFullScreenElement || document.msFullscreenElement;
         
-        // Use e.code to detect physical key, not e.key (which gives ÷ on Mac with Alt+F)
-        if (e.altKey && e.code === 'KeyF') {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            const video = document.querySelector('video');
+        if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
+            return fullscreenElement;
+        }
+        
+        const isTyping = e.target.matches('input, textarea, [contenteditable="true"]') || 
+                         e.target.closest('[contenteditable="true"]') ||
+                         e.target.getAttribute('role') === 'textbox';
+        if (!isTyping) {
+            return document.querySelector('video');
+        }
+        
+        return null;
+    }
+
+    // Handler for video keyboard controls
+    function handleVideoKeydown(e) {
+        // F or / to toggle video fullscreen
+        if (e.code === 'KeyF' || e.code === 'Slash') {
+            const video = getTargetVideo(e);
             if (video) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
                 toggleVideoFullscreen(video);
             }
             return;
         }
         
-        // Spacebar to pause/unpause video when in fullscreen
+        // Spacebar to pause/unpause video
         if (e.code === 'Space') {
-            if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
+            const video = getTargetVideo(e);
+            if (video) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                const video = fullscreenElement;
                 if (video.paused) {
                     video.play().catch(err => console.error('Video play failed:', err));
                 } else {
@@ -521,15 +539,14 @@
             return;
         }
         
-        // Up/Down arrows to change volume when video is in fullscreen
+        // Up/Down arrows to change volume
         if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
-            if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
+            const video = getTargetVideo(e);
+            if (video) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                const video = fullscreenElement;
                 const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
                 video.volume = Math.max(0, Math.min(1, video.volume + delta));
-                // Unmute if currently muted
                 if (video.muted) {
                     video.muted = false;
                 }
