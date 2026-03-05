@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.57
+// @name         Image Fullscreen Toggle v1.58
 // @namespace    http://example.com/
-// @version      1.57
+// @version      1.58
 // @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -314,6 +314,24 @@
 
     // === VIDEO FULLSCREEN FUNCTIONALITY ===
     
+    // Shared volume state across all videos
+    let sharedVolume = 1.0;
+    
+    function isPostPage() {
+        return location.pathname.startsWith('/imagine/post/');
+    }
+    
+    // Apply shared volume to a single video
+    function applySharedVolume(video) {
+        video.volume = sharedVolume;
+        video.muted = false;
+    }
+    
+    // Apply shared volume to all videos on the page
+    function applySharedVolumeToAll() {
+        document.querySelectorAll('video').forEach(applySharedVolume);
+    }
+    
     // Toggle fullscreen for video element
     function toggleVideoFullscreen(video) {
         const doc = document;
@@ -401,8 +419,20 @@
     }
     
     // Watch for new videos being added to the page
-    const videoObserver = new MutationObserver(() => {
+    const videoObserver = new MutationObserver((mutations) => {
         addFullscreenButtonsToVideos();
+        // Apply shared volume to any newly added videos (only on post pages)
+        if (isPostPage()) {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node.tagName === 'VIDEO') {
+                        applySharedVolume(node);
+                    } else if (node.querySelectorAll) {
+                        node.querySelectorAll('video').forEach(applySharedVolume);
+                    }
+                }
+            }
+        }
     });
     
     // Start observing when DOM is ready
@@ -539,15 +569,18 @@
             return;
         }
         
-        // Up/Down arrows to change volume
+        // Up/Down arrows to change volume (synced across all videos only on post pages)
         if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
             const video = getTargetVideo(e);
             if (video) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
-                video.volume = Math.max(0, Math.min(1, video.volume + delta));
-                if (video.muted) {
+                sharedVolume = Math.max(0, Math.min(1, video.volume + delta));
+                if (isPostPage()) {
+                    applySharedVolumeToAll();
+                } else {
+                    video.volume = sharedVolume;
                     video.muted = false;
                 }
             }
