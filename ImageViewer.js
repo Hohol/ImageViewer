@@ -544,6 +544,7 @@
             video.addEventListener('keydown', handleVideoKeydown, true);
             
             // Hide native controls in fullscreen, but show when cursor is near bottom
+            video._originalControls = video.controls;
             video.controls = false;
             if (!document.getElementById('iv-hide-controls')) {
                 const style = document.createElement('style');
@@ -594,7 +595,8 @@
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
                 video.removeEventListener('keydown', handleVideoKeydown, true);
-                video.controls = true;
+                video.controls = video._originalControls || false;
+                delete video._originalControls;
                 if (video._onMouseMove) {
                     document.removeEventListener('mousemove', video._onMouseMove);
                     delete video._onMouseMove;
