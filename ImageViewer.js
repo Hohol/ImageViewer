@@ -542,9 +542,17 @@
             
             // Add keydown listener directly to video element (in case events don't bubble)
             video.addEventListener('keydown', handleVideoKeydown, true);
-            // Make video focusable and focus it to receive key events
-            video.tabIndex = 0;
-            video.focus();
+            
+            // After video resumes playing, blur to hide native controls.
+            // Our capture-phase listeners on window/document handle all keyboard shortcuts.
+            video._onPlaying = () => {
+                setTimeout(() => {
+                    if (document.fullscreenElement === video) {
+                        video.blur();
+                    }
+                }, 2500);
+            };
+            video.addEventListener('playing', video._onPlaying);
             
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
@@ -570,6 +578,10 @@
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
                 video.removeEventListener('keydown', handleVideoKeydown, true);
+                if (video._onPlaying) {
+                    video.removeEventListener('playing', video._onPlaying);
+                    delete video._onPlaying;
+                }
                 video.style.cssText = video.dataset.originalStyle;
                 if (video.dataset.originalClass) {
                     video.className = video.dataset.originalClass;
