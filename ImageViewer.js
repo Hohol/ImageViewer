@@ -543,7 +543,7 @@
             // Add keydown listener directly to video element (in case events don't bubble)
             video.addEventListener('keydown', handleVideoKeydown, true);
             
-            // Hide native controls in fullscreen — our keyboard shortcuts handle everything
+            // Hide native controls in fullscreen, but show when cursor is near bottom
             video.controls = false;
             if (!document.getElementById('iv-hide-controls')) {
                 const style = document.createElement('style');
@@ -555,6 +555,20 @@
                 `;
                 document.head.appendChild(style);
             }
+            
+            video._onMouseMove = (e) => {
+                const nearBottom = e.clientY > window.innerHeight * 0.85;
+                const hideStyle = document.getElementById('iv-hide-controls');
+                if (nearBottom) {
+                    video.controls = true;
+                    if (hideStyle) hideStyle.disabled = true;
+                } else {
+                    video.controls = false;
+                    if (hideStyle) hideStyle.disabled = false;
+                    video.blur();
+                }
+            };
+            document.addEventListener('mousemove', video._onMouseMove);
             
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
@@ -581,6 +595,10 @@
             videos.forEach(video => {
                 video.removeEventListener('keydown', handleVideoKeydown, true);
                 video.controls = true;
+                if (video._onMouseMove) {
+                    document.removeEventListener('mousemove', video._onMouseMove);
+                    delete video._onMouseMove;
+                }
                 const hideStyle = document.getElementById('iv-hide-controls');
                 if (hideStyle) hideStyle.remove();
                 video.style.cssText = video.dataset.originalStyle;
