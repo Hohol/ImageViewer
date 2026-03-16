@@ -67,6 +67,8 @@
         if (img.closest('[role="listitem"]')) return true;
         // Skip Gemini uploaded image preview buttons
         if (img.closest('button.preview-image-button')) return true;
+        // Skip images in Grok's "Which image do you prefer?" feedback overlay
+        if (img.closest('.backdrop-blur-md')) return true;
         return false;
     }
 
