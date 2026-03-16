@@ -319,6 +319,84 @@
     // Shared volume state across all videos
     let sharedVolume = 1.0;
     
+    // Volume overlay indicator
+    let volumeOverlay = null;
+    let volumeHideTimeout = null;
+    
+    function showVolumeOverlay(volume) {
+        if (!volumeOverlay) {
+            volumeOverlay = document.createElement('div');
+            // Popover API puts the element in the browser's top layer,
+            // making it visible even over fullscreen elements
+            volumeOverlay.setAttribute('popover', 'manual');
+            Object.assign(volumeOverlay.style, {
+                position: 'fixed',
+                inset: 'auto',
+                bottom: '60px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                margin: '0',
+                border: 'none',
+                zIndex: '2147483647',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                color: 'white',
+                fontSize: '14px',
+                fontFamily: 'sans-serif',
+                transition: 'opacity 0.3s',
+                pointerEvents: 'none',
+                userSelect: 'none',
+                overflow: 'visible'
+            });
+            
+            const barBg = document.createElement('div');
+            Object.assign(barBg.style, {
+                width: '120px',
+                height: '4px',
+                borderRadius: '2px',
+                backgroundColor: 'rgba(255, 255, 255, 0.25)'
+            });
+            
+            const barFill = document.createElement('div');
+            Object.assign(barFill.style, {
+                height: '100%',
+                borderRadius: '2px',
+                backgroundColor: 'rgba(255, 255, 255, 0.85)',
+                transition: 'width 0.1s'
+            });
+            barBg.appendChild(barFill);
+            
+            const label = document.createElement('span');
+            volumeOverlay._barFill = barFill;
+            volumeOverlay._label = label;
+            
+            volumeOverlay.appendChild(label);
+            volumeOverlay.appendChild(barBg);
+            document.body.appendChild(volumeOverlay);
+        }
+        
+        const pct = Math.round(volume * 100);
+        volumeOverlay._barFill.style.width = pct + '%';
+        volumeOverlay._label.textContent = pct + '%';
+        
+        try { volumeOverlay.showPopover(); } catch(e) {}
+        volumeOverlay.style.opacity = '1';
+        
+        clearTimeout(volumeHideTimeout);
+        volumeHideTimeout = setTimeout(() => {
+            if (volumeOverlay) {
+                volumeOverlay.style.opacity = '0';
+                setTimeout(() => {
+                    try { volumeOverlay.hidePopover(); } catch(e) {}
+                }, 300);
+            }
+        }, 1500);
+    }
+    
     function isPostPage() {
         return location.pathname.startsWith('/imagine/post/');
     }
@@ -585,6 +663,7 @@
                     video.volume = sharedVolume;
                     video.muted = false;
                 }
+                showVolumeOverlay(sharedVolume);
             }
         }
     }
