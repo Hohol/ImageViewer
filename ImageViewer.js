@@ -543,16 +543,18 @@
             // Add keydown listener directly to video element (in case events don't bubble)
             video.addEventListener('keydown', handleVideoKeydown, true);
             
-            // After video resumes playing, blur to hide native controls.
-            // Our capture-phase listeners on window/document handle all keyboard shortcuts.
-            video._onPlaying = () => {
-                setTimeout(() => {
-                    if (document.fullscreenElement === video) {
-                        video.blur();
-                    }
-                }, 2500);
-            };
-            video.addEventListener('playing', video._onPlaying);
+            // Hide native controls in fullscreen — our keyboard shortcuts handle everything
+            video.controls = false;
+            if (!document.getElementById('iv-hide-controls')) {
+                const style = document.createElement('style');
+                style.id = 'iv-hide-controls';
+                style.textContent = `
+                    video::-webkit-media-controls { display: none !important; opacity: 0 !important; }
+                    video::-webkit-media-controls-enclosure { display: none !important; }
+                    video::-webkit-media-controls-panel { display: none !important; }
+                `;
+                document.head.appendChild(style);
+            }
             
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
@@ -578,10 +580,9 @@
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
                 video.removeEventListener('keydown', handleVideoKeydown, true);
-                if (video._onPlaying) {
-                    video.removeEventListener('playing', video._onPlaying);
-                    delete video._onPlaying;
-                }
+                video.controls = true;
+                const hideStyle = document.getElementById('iv-hide-controls');
+                if (hideStyle) hideStyle.remove();
                 video.style.cssText = video.dataset.originalStyle;
                 if (video.dataset.originalClass) {
                     video.className = video.dataset.originalClass;
