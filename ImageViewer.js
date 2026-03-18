@@ -557,6 +557,7 @@
                 document.head.appendChild(style);
             }
             
+            video._cursorHideTimer = null;
             video._onMouseMove = (e) => {
                 const nearBottom = e.clientY > window.innerHeight * 0.85;
                 const hideStyle = document.getElementById('iv-hide-controls');
@@ -568,6 +569,14 @@
                     if (hideStyle) hideStyle.disabled = false;
                     video.blur();
                 }
+                
+                document.body.style.cursor = '';
+                clearTimeout(video._cursorHideTimer);
+                video._cursorHideTimer = setTimeout(() => {
+                    if (document.fullscreenElement === video) {
+                        document.body.style.cursor = 'none';
+                    }
+                }, 2000);
             };
             document.addEventListener('mousemove', video._onMouseMove);
             
@@ -599,7 +608,10 @@
                 delete video._originalControls;
                 if (video._onMouseMove) {
                     document.removeEventListener('mousemove', video._onMouseMove);
+                    clearTimeout(video._cursorHideTimer);
+                    document.body.style.cursor = '';
                     delete video._onMouseMove;
+                    delete video._cursorHideTimer;
                 }
                 const hideStyle = document.getElementById('iv-hide-controls');
                 if (hideStyle) hideStyle.remove();
