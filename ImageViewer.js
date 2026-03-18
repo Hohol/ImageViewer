@@ -316,8 +316,14 @@
 
     // === VIDEO FULLSCREEN FUNCTIONALITY ===
     
-    // Shared volume state across all videos
-    let sharedVolume = 1.0;
+    // Shared volume state across all videos (persisted in localStorage)
+    const STORAGE_KEY = 'imageViewerSharedVolume';
+    let sharedVolume = (() => {
+        try {
+            const v = parseFloat(localStorage.getItem(STORAGE_KEY));
+            return !isNaN(v) && v >= 0 && v <= 1 ? v : 1.0;
+        } catch (e) { return 1.0; }
+    })();
     
     // Volume overlay indicator
     let volumeOverlay = null;
@@ -518,10 +524,12 @@
     // Start observing when DOM is ready
     if (document.body) {
         addFullscreenButtonsToVideos();
+        if (isPostPage()) applySharedVolumeToAll();
         videoObserver.observe(document.body, { childList: true, subtree: true });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
             addFullscreenButtonsToVideos();
+            if (isPostPage()) applySharedVolumeToAll();
             videoObserver.observe(document.body, { childList: true, subtree: true });
         });
     }
@@ -702,6 +710,7 @@
                 e.stopImmediatePropagation();
                 const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
                 sharedVolume = Math.max(0, Math.min(1, video.volume + delta));
+                try { localStorage.setItem(STORAGE_KEY, String(sharedVolume)); } catch (e) {}
                 if (isPostPage()) {
                     applySharedVolumeToAll();
                 } else {
