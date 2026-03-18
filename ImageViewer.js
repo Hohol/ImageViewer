@@ -702,6 +702,20 @@
             return;
         }
         
+        // Left/Right arrows to seek (skip when image overlay is open)
+        if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+            if (!overlay) {
+                const video = getTargetVideo(e);
+                if (video) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    const delta = e.code === 'ArrowLeft' ? -1 : 1;
+                    video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta));
+                }
+            }
+            return;
+        }
+        
         // Up/Down arrows to change volume (synced across all videos only on post pages)
         if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
             const video = getTargetVideo(e);
