@@ -722,8 +722,12 @@
             if (video) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                const delta = e.code === 'ArrowUp' ? 0.1 : -0.1;
-                sharedVolume = Math.max(0, Math.min(1, video.volume + delta));
+                const vol = Math.round(video.volume * 100) / 100;
+                const step = e.code === 'ArrowUp'
+                    ? (vol < 10 / 100 ? 0.02 : 0.1)
+                    : (vol <= 10 / 100 ? 0.02 : 0.1);
+                const delta = e.code === 'ArrowUp' ? step : -step;
+                sharedVolume = Math.round(Math.max(0, Math.min(1, vol + delta)) * 100) / 100;
                 try { localStorage.setItem(STORAGE_KEY, String(sharedVolume)); } catch (e) {}
                 if (isPostPage()) {
                     applySharedVolumeToAll();
