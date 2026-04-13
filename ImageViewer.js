@@ -674,6 +674,52 @@
         return null;
     }
 
+    // Loop region state
+    let loopIn = null;
+    let loopOut = null;
+    let loopVideo = null;
+    let loopRafId = null;
+    let loopOriginalLoop = null;
+    
+    function loopRafCheck() {
+        if (!loopVideo) return;
+        const start = loopIn !== null ? loopIn : 0;
+        const end = loopOut !== null ? loopOut : loopVideo.duration;
+        if (loopVideo.currentTime >= end || loopVideo.currentTime < start) {
+            loopVideo.currentTime = start;
+            if (loopVideo.paused) {
+                loopVideo.play().catch(() => {});
+            }
+        }
+        loopRafId = requestAnimationFrame(loopRafCheck);
+    }
+    
+    function stopLooping() {
+        if (loopRafId !== null) {
+            cancelAnimationFrame(loopRafId);
+            loopRafId = null;
+        }
+        if (loopVideo && loopOriginalLoop !== null) {
+            loopVideo.loop = loopOriginalLoop;
+            loopOriginalLoop = null;
+        }
+    }
+    
+    function startLooping(video) {
+        stopLooping();
+        loopVideo = video;
+        loopOriginalLoop = video.loop;
+        video.loop = false;
+        loopRafId = requestAnimationFrame(loopRafCheck);
+    }
+    
+    function clearLoop() {
+        stopLooping();
+        loopIn = null;
+        loopOut = null;
+        loopVideo = null;
+    }
+
     // Handler for video keyboard controls
     function handleVideoKeydown(e) {
         // F or / to toggle video fullscreen
@@ -698,6 +744,46 @@
                 } else {
                     video.pause();
                 }
+            }
+            return;
+        }
+        
+        // I to set loop in-point
+        if (e.code === 'KeyI') {
+            const video = getTargetVideo(e);
+            if (video) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (loopVideo !== video) clearLoop();
+                loopIn = video.currentTime;
+                if (loopOut !== null && loopIn >= loopOut) loopOut = null;
+                startLooping(video);
+            }
+            return;
+        }
+        
+        // O to set loop out-point
+        if (e.code === 'KeyO') {
+            const video = getTargetVideo(e);
+            if (video) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (loopVideo !== video) clearLoop();
+                loopOut = video.currentTime;
+                if (loopIn !== null && loopOut <= loopIn) loopIn = null;
+                startLooping(video);
+                const start = loopIn !== null ? loopIn : 0;
+                video.currentTime = start;
+            }
+            return;
+        }
+        
+        // Backspace to clear loop
+        if (e.code === 'Backspace') {
+            if (loopIn !== null || loopOut !== null) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                clearLoop();
             }
             return;
         }
