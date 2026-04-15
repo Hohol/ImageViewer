@@ -504,6 +504,15 @@
         videos.forEach(video => createFullscreenButton(video));
     }
     
+    // Clear loop when the looped video's source changes (SPA navigation reuses same element)
+    let loopVideoSrc = null;
+    document.addEventListener('loadstart', (e) => {
+        if (e.target.tagName === 'VIDEO' && loopVideo && e.target === loopVideo) {
+            const newSrc = e.target.src || e.target.currentSrc;
+            if (loopVideoSrc && newSrc !== loopVideoSrc) clearLoop();
+        }
+    }, true);
+    
     // Watch for new videos being added to the page
     const videoObserver = new MutationObserver((mutations) => {
         addFullscreenButtonsToVideos();
@@ -547,6 +556,9 @@
             // Just entered fullscreen with a video - apply styles
             const video = fullscreenElement;
             lastFullscreenVideo = video; // Track for workaround
+            
+            // Clear loop if switching to a different video
+            if (loopVideo && loopVideo !== video) clearLoop();
             
             // Add keydown listener directly to video element (in case events don't bubble)
             video.addEventListener('keydown', handleVideoKeydown, true);
@@ -708,6 +720,7 @@
     function startLooping(video) {
         stopLooping();
         loopVideo = video;
+        loopVideoSrc = video.src || video.currentSrc;
         loopOriginalLoop = video.loop;
         video.loop = false;
         loopRafId = requestAnimationFrame(loopRafCheck);
@@ -718,6 +731,7 @@
         loopIn = null;
         loopOut = null;
         loopVideo = null;
+        loopVideoSrc = null;
     }
 
     // Handler for video keyboard controls
