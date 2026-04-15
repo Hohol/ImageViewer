@@ -46,8 +46,11 @@
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
         if (alt === 'User' || alt === 'pfp') return true;
-        // Skip preview images (URLs ending with /preview-image)
+        // Grok grid thumbnails (e.g. alt="Thumbnail 1")
+        if (alt && /^Thumbnail\b/i.test(alt)) return true;
+        // Skip preview images (Grok: /preview-image or .../preview_image.jpg)
         if (img.src.endsWith('/preview-image')) return true;
+        if (img.src.includes('/preview_image')) return true;
         // Skip nearly invisible images (loading/transitioning placeholders)
         const opacity = parseFloat(img.style.opacity);
         if (!isNaN(opacity) && opacity < 0.5) return true;
