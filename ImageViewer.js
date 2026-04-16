@@ -48,6 +48,8 @@
         if (alt === 'User' || alt === 'pfp') return true;
         // Grok grid thumbnails (e.g. alt="Thumbnail 1")
         if (alt && /^Thumbnail\b/i.test(alt)) return true;
+        // Grok compact selectable grid cards (same cards as click exclude below)
+        if (img.closest('[class*="compact-card"]')) return true;
         // Skip preview images (Grok: /preview-image or .../preview_image.jpg)
         if (img.src.endsWith('/preview-image')) return true;
         if (img.src.includes('/preview_image')) return true;
