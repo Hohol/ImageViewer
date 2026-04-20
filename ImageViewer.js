@@ -60,6 +60,17 @@
         return false;
     }
 
+    // Grok: chat cards use object-cover + max-height so portrait images crop top/bottom
+    if (isGrokHost() && !document.getElementById('iv-grok-portrait-fix')) {
+        const s = document.createElement('style');
+        s.id = 'iv-grok-portrait-fix';
+        s.textContent = `
+            [class*="group/grok-image"] img { object-fit: contain !important; }
+            div.grid > img.col-start-1.row-start-1.object-cover { object-fit: contain !important; }
+        `;
+        document.head.appendChild(s);
+    }
+
     // Check if image should be skipped from navigation (avatars, previews, etc.)
     function shouldSkipImage(img) {
         if (isGrokHost() && !isGrokOptInImage(img)) return true;
