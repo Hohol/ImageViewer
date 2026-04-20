@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.58
+// @name         Image Fullscreen Toggle v1.59
 // @namespace    http://example.com/
-// @version      1.58
-// @description  Click any image on chatgpt.com, grok.com or gemini.google.com to zoom+fullscreen; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; opt-in on chatgpt.com, grok.com and gemini.google.com, disabled on /library pages; exclude avatars and generated images on click, but include generated images in navigation.
+// @version      1.59
+// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -41,8 +41,28 @@
     let currentIndex = -1;
     let overlayImage = null;
 
+    function isGrokHost() {
+        const h = location.hostname;
+        return h === 'grok.com' || h.endsWith('.grok.com');
+    }
+
+    // Grok: only main chat generated images (opt-in), not thumbnails / chrome / etc.
+    function isGrokOptInImage(img) {
+        if (img.closest('[class*="group/grok-image"]')) return true;
+        // Imagine / large inline card: img.col-start-1.row-start-1 inside div.grid under rounded-2xl group card
+        const grid = img.closest('div.grid');
+        if (grid && img.classList.contains('col-start-1') && img.classList.contains('row-start-1')) {
+            const card = grid.parentElement;
+            if (card && card.classList.contains('group') && card.classList.contains('rounded-2xl')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Check if image should be skipped from navigation (avatars, previews, etc.)
     function shouldSkipImage(img) {
+        if (isGrokHost() && !isGrokOptInImage(img)) return true;
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
         if (alt === 'User' || alt === 'pfp') return true;
@@ -65,7 +85,9 @@
     // Exclude certain images and generated-image blocks on initial click
     function isExcludedImage(img) {
         if (shouldSkipImage(img)) return true;
-        if (img.closest('div.flex.flex-col.gap-2')) return true;
+        if (img.closest('div.flex.flex-col.gap-2')) {
+            if (!(isGrokHost() && isGrokOptInImage(img))) return true;
+        }
         // Skip thumbnail images in Favorites button
         if (img.closest('button[aria-label="Favorites"]')) return true;
         // Skip masonry grid thumbnails (Grok's image gallery)
@@ -177,7 +199,9 @@
     }
 
     function navigate(delta) {
-        currentIndex = (currentIndex + delta + imgs.length) % imgs.length;
+        const next = currentIndex + delta;
+        if (next < 0 || next >= imgs.length) return;
+        currentIndex = next;
         displayImageInOverlay(imgs[currentIndex]);
     }
 
