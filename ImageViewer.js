@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.67
+// @name         Image Fullscreen Toggle v1.69
 // @namespace    http://example.com/
-// @version      1.67
+// @version      1.69
 // @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* a fixed button deletes all post media from storage via Grok API.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -448,6 +448,8 @@
     }
 
     const IV_GROK_DELETE_ALL_BTN_ID = 'iv-grok-delete-all-media';
+    /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
+    const IV_GROK_DELETE_MEDIA_DEBUG = false;
     const GROK_ASSET_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
     function getImaginePostRoot() {
@@ -469,60 +471,82 @@
             if (gen) return gen[1].toLowerCase();
             const uploaded = path.match(new RegExp('/users/(' + GROK_ASSET_UUID + ')/(' + GROK_ASSET_UUID + ')/content', 'i'));
             if (uploaded) return uploaded[2].toLowerCase();
-            // Imagine post filmstrip: "videos" are often <img> to imagine-public.x.ai, not <video>.
-            const shareVid = path.match(new RegExp('/imagine-public/share-videos/(' + GROK_ASSET_UUID + ')_thumbnail\\.', 'i'));
-            if (shareVid) return shareVid[1].toLowerCase();
+            // Imagine post filmstrip: thumbs/videos often use imagine-public.x.ai (not only share-images/).
+            const shareVidThumb = path.match(new RegExp('/imagine-public/share-videos/(' + GROK_ASSET_UUID + ')_thumbnail\\.', 'i'));
+            if (shareVidThumb) return shareVidThumb[1].toLowerCase();
+            const shareVidFile = path.match(new RegExp('/imagine-public/share-videos/(' + GROK_ASSET_UUID + ')\\.(?:mp4|webm|mov|m4v)$', 'i'));
+            if (shareVidFile) return shareVidFile[1].toLowerCase();
             const shareImg = path.match(new RegExp('/imagine-public/share-images/(' + GROK_ASSET_UUID + ')\\.', 'i'));
             if (shareImg) return shareImg[1].toLowerCase();
+            const imagineImg = path.match(new RegExp('/imagine-public/images/(' + GROK_ASSET_UUID + ')\\.', 'i'));
+            if (imagineImg) return imagineImg[1].toLowerCase();
             return null;
         } catch (e) {
             return null;
         }
     }
 
-    function collectImaginePostMediaIdsInDomOrder(root) {
+    function collectImaginePostMediaIdsInDomOrder(root, debugRecords) {
         const ordered = [];
         const seen = new Set();
         if (!root || root.nodeType !== 1) return ordered;
-        function consider(url) {
+        function consider(url, note) {
             if (!url || typeof url !== 'string') return;
             const id = extractGrokStorageMediaIdFromUrl(url);
+            if (debugRecords) {
+                let pathname = '';
+                try {
+                    pathname = new URL(url, location.href).pathname;
+                } catch (e2) {
+                    pathname = '(invalid URL)';
+                }
+                debugRecords.push({
+                    note: note || '?',
+                    url: url.length > 500 ? url.slice(0, 500) + '\u2026' : url,
+                    pathname: pathname,
+                    extractedId: id || null,
+                    duplicateId: !!(id && seen.has(id)),
+                    parserMissed: !id
+                });
+            }
             if (!id || seen.has(id)) return;
             seen.add(id);
             ordered.push(id);
         }
-        function considerSrcsetForCollect(srcset) {
+        function considerSrcsetForCollect(srcset, notePrefix) {
             if (!srcset) return;
-            srcset.split(',').forEach((part) => {
+            srcset.split(',').forEach((part, i) => {
                 const url = part.trim().split(/\s+/)[0];
-                consider(url);
+                consider(url, notePrefix + '[' + i + ']');
             });
         }
         function visitMediaNode(el) {
             const tag = el.tagName;
             if (tag === 'IMG') {
-                consider(el.getAttribute('src'));
-                considerSrcsetForCollect(el.getAttribute('srcset'));
+                consider(el.getAttribute('src'), 'img.src');
+                considerSrcsetForCollect(el.getAttribute('srcset'), 'img.srcset');
                 return;
             }
             if (tag === 'SOURCE') {
-                consider(el.getAttribute('src'));
+                consider(el.getAttribute('src'), 'source.src');
                 return;
             }
             if (tag === 'VIDEO') {
-                consider(el.getAttribute('src'));
-                consider(el.getAttribute('poster'));
+                consider(el.getAttribute('src'), 'video.src');
+                consider(el.getAttribute('poster'), 'video.poster');
                 if (el.attributes) {
                     for (let i = 0; i < el.attributes.length; i++) {
                         const a = el.attributes[i];
                         const v = a.value;
-                        if (v && (v.indexOf('https://') !== -1 || v.indexOf('http://') !== -1)) consider(v);
+                        if (v && (v.indexOf('https://') !== -1 || v.indexOf('http://') !== -1)) {
+                            consider(v, 'video.attr:' + a.name);
+                        }
                     }
                 }
-                el.querySelectorAll('source').forEach((s) => consider(s.getAttribute('src')));
+                el.querySelectorAll('source').forEach((s, j) => consider(s.getAttribute('src'), 'video>source[' + j + ']'));
                 try {
                     const cs = el.currentSrc;
-                    if (cs && cs.indexOf('blob:') !== 0) consider(cs);
+                    if (cs && cs.indexOf('blob:') !== 0) consider(cs, 'video.currentSrc');
                 } catch (e) {}
             }
         }
@@ -612,7 +636,23 @@
                 e.stopPropagation();
                 const root = getImaginePostRoot();
                 if (!root) return;
-                const allIds = collectImaginePostMediaIdsInDomOrder(root);
+                const debugRecords = IV_GROK_DELETE_MEDIA_DEBUG ? [] : null;
+                const allIds = collectImaginePostMediaIdsInDomOrder(root, debugRecords);
+                if (IV_GROK_DELETE_MEDIA_DEBUG) {
+                    let filmstripButtons = 0;
+                    try {
+                        filmstripButtons = root.querySelectorAll('button[data-filmstrip-item="true"]').length;
+                    } catch (e3) {}
+                    console.log('[Image Viewer] Grok delete-all media scan', {
+                        path: location.pathname,
+                        filmstripButtonCount: filmstripButtons,
+                        imgWithSrcInPost: root.querySelectorAll('img[src]').length,
+                        videoInPost: root.querySelectorAll('video').length,
+                        uniqueExtractedIds: allIds.slice(),
+                        records: debugRecords || [],
+                        hint: 'If filmstripButtonCount > uniqueExtractedIds.length, two slides may share one id, or a URL shape is not parsed (parserMissed).'
+                    });
+                }
                 if (!allIds.length) {
                     alert('Image Viewer: No media IDs found in this post.');
                     return;
