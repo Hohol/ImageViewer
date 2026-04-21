@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.59
+// @name         Image Fullscreen Toggle v1.67
 // @namespace    http://example.com/
-// @version      1.59
-// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages.
+// @version      1.67
+// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* a fixed button deletes all post media from storage via Grok API.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -446,7 +446,205 @@
     function isPostPage() {
         return location.pathname.startsWith('/imagine/post/');
     }
-    
+
+    const IV_GROK_DELETE_ALL_BTN_ID = 'iv-grok-delete-all-media';
+    const GROK_ASSET_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+    function getImaginePostRoot() {
+        const hr = document.getElementById('imagine-post-page-content');
+        if (hr) {
+            const article = hr.closest('article');
+            if (article) return article;
+        }
+        const strip = document.querySelector('[data-filmstrip-scroll="true"]');
+        return strip ? strip.closest('article') : null;
+    }
+
+    function extractGrokStorageMediaIdFromUrl(url) {
+        if (!url || typeof url !== 'string' || url.indexOf('blob:') === 0) return null;
+        try {
+            const path = new URL(url, location.href).pathname;
+            let gen = path.match(new RegExp('/generated/(' + GROK_ASSET_UUID + ')(?:/|$)', 'i'));
+            if (!gen) gen = path.match(new RegExp('/generated/(' + GROK_ASSET_UUID + ')\\.(?:m3u8|mp4|webm)$', 'i'));
+            if (gen) return gen[1].toLowerCase();
+            const uploaded = path.match(new RegExp('/users/(' + GROK_ASSET_UUID + ')/(' + GROK_ASSET_UUID + ')/content', 'i'));
+            if (uploaded) return uploaded[2].toLowerCase();
+            // Imagine post filmstrip: "videos" are often <img> to imagine-public.x.ai, not <video>.
+            const shareVid = path.match(new RegExp('/imagine-public/share-videos/(' + GROK_ASSET_UUID + ')_thumbnail\\.', 'i'));
+            if (shareVid) return shareVid[1].toLowerCase();
+            const shareImg = path.match(new RegExp('/imagine-public/share-images/(' + GROK_ASSET_UUID + ')\\.', 'i'));
+            if (shareImg) return shareImg[1].toLowerCase();
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function collectImaginePostMediaIdsInDomOrder(root) {
+        const ordered = [];
+        const seen = new Set();
+        if (!root || root.nodeType !== 1) return ordered;
+        function consider(url) {
+            if (!url || typeof url !== 'string') return;
+            const id = extractGrokStorageMediaIdFromUrl(url);
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            ordered.push(id);
+        }
+        function considerSrcsetForCollect(srcset) {
+            if (!srcset) return;
+            srcset.split(',').forEach((part) => {
+                const url = part.trim().split(/\s+/)[0];
+                consider(url);
+            });
+        }
+        function visitMediaNode(el) {
+            const tag = el.tagName;
+            if (tag === 'IMG') {
+                consider(el.getAttribute('src'));
+                considerSrcsetForCollect(el.getAttribute('srcset'));
+                return;
+            }
+            if (tag === 'SOURCE') {
+                consider(el.getAttribute('src'));
+                return;
+            }
+            if (tag === 'VIDEO') {
+                consider(el.getAttribute('src'));
+                consider(el.getAttribute('poster'));
+                if (el.attributes) {
+                    for (let i = 0; i < el.attributes.length; i++) {
+                        const a = el.attributes[i];
+                        const v = a.value;
+                        if (v && (v.indexOf('https://') !== -1 || v.indexOf('http://') !== -1)) consider(v);
+                    }
+                }
+                el.querySelectorAll('source').forEach((s) => consider(s.getAttribute('src')));
+                try {
+                    const cs = el.currentSrc;
+                    if (cs && cs.indexOf('blob:') !== 0) consider(cs);
+                } catch (e) {}
+            }
+        }
+        function walk(node) {
+            if (!node) return;
+            if (node.nodeType === 1) {
+                const el = node;
+                const tag = el.tagName;
+                if (tag === 'IMG' || tag === 'VIDEO' || tag === 'SOURCE') visitMediaNode(el);
+                for (let i = 0; i < el.children.length; i++) walk(el.children[i]);
+                if (el.shadowRoot) walk(el.shadowRoot);
+            }
+        }
+        walk(root);
+        return ordered;
+    }
+
+    /** DOM-first id is deleted last (post anchor), rest first — order may matter for Grok. */
+    function imaginePostMediaIdsForDelete(allIds) {
+        if (allIds.length <= 1) return allIds.slice();
+        return allIds.slice(1).concat(allIds[0]);
+    }
+
+    function deleteGrokMediaPostOne(id) {
+        return fetch('https://grok.com/rest/media/post/delete', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'content-type': 'application/json',
+                'accept': '*/*',
+                'x-xai-request-id': typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())
+            },
+            body: JSON.stringify({ id })
+        }).then((res) => ({ ok: res.ok, status: res.status }));
+    }
+
+    let imagineDeleteBtnSyncScheduled = false;
+    function scheduleImaginePostDeleteAllButtonSync() {
+        if (!isGrokHost() || imagineDeleteBtnSyncScheduled) return;
+        imagineDeleteBtnSyncScheduled = true;
+        requestAnimationFrame(() => {
+            imagineDeleteBtnSyncScheduled = false;
+            syncImaginePostDeleteAllButton();
+        });
+    }
+
+    function syncImaginePostDeleteAllButton() {
+        const existing = document.getElementById(IV_GROK_DELETE_ALL_BTN_ID);
+        if (!isGrokHost() || !isPostPage()) {
+            if (existing) existing.remove();
+            return;
+        }
+        const article = getImaginePostRoot();
+        if (!article) {
+            if (existing) existing.remove();
+            return;
+        }
+        let btn = existing;
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.id = IV_GROK_DELETE_ALL_BTN_ID;
+            btn.type = 'button';
+            btn.title = 'Delete all media in this post from your Grok storage (same as removing each item manually). Cannot be undone.';
+            btn.textContent = '\uD83D\uDDD1';
+            Object.assign(btn.style, {
+                position: 'fixed',
+                bottom: '96px',
+                right: '16px',
+                zIndex: '2147483640',
+                width: '40px',
+                height: '40px',
+                borderRadius: '9999px',
+                border: '1px solid rgba(248,113,113,0.55)',
+                background: 'rgba(24,24,27,0.92)',
+                color: '#f87171',
+                cursor: 'pointer',
+                fontSize: '18px',
+                lineHeight: '1',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                padding: '0'
+            });
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const root = getImaginePostRoot();
+                if (!root) return;
+                const allIds = collectImaginePostMediaIdsInDomOrder(root);
+                if (!allIds.length) {
+                    alert('Image Viewer: No media IDs found in this post.');
+                    return;
+                }
+                const ids = imaginePostMediaIdsForDelete(allIds);
+                if (!confirm('Delete all ' + allIds.length + ' media item(s) from your Grok storage?\n\nThe first item in the strip is deleted last.\n\nThis cannot be undone.')) return;
+                btn.disabled = true;
+                const prev = btn.textContent;
+                const failures = [];
+                for (let i = 0; i < ids.length; i++) {
+                    const id = ids[i];
+                    btn.textContent = String(i + 1) + '/' + ids.length;
+                    try {
+                        const r = await deleteGrokMediaPostOne(id);
+                        if (!r.ok) failures.push(id + ' (HTTP ' + r.status + ')');
+                    } catch (err) {
+                        failures.push(id + ' (network error)');
+                    }
+                }
+                btn.textContent = prev;
+                btn.disabled = false;
+                if (failures.length) {
+                    const head = failures.slice(0, 12).join('\n');
+                    alert('Image Viewer: Some deletes failed:\n' + head + (failures.length > 12 ? '\n…' : ''));
+                } else {
+                    alert('Image Viewer: Deleted ' + ids.length + ' media item(s) from storage.');
+                }
+            });
+        }
+        if (!btn.parentElement) document.body.appendChild(btn);
+    }
+
     // Apply shared volume to a single video
     function applySharedVolume(video) {
         video.volume = sharedVolume;
@@ -556,6 +754,7 @@
     // Watch for new videos being added to the page
     const videoObserver = new MutationObserver((mutations) => {
         addFullscreenButtonsToVideos();
+        scheduleImaginePostDeleteAllButtonSync();
         // Apply shared volume to any newly added videos (only on post pages)
         if (isPostPage()) {
             for (const mutation of mutations) {
@@ -573,15 +772,19 @@
     // Start observing when DOM is ready
     if (document.body) {
         addFullscreenButtonsToVideos();
+        scheduleImaginePostDeleteAllButtonSync();
         if (isPostPage()) applySharedVolumeToAll();
         videoObserver.observe(document.body, { childList: true, subtree: true });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
             addFullscreenButtonsToVideos();
+            scheduleImaginePostDeleteAllButtonSync();
             if (isPostPage()) applySharedVolumeToAll();
             videoObserver.observe(document.body, { childList: true, subtree: true });
         });
     }
+
+    window.addEventListener('popstate', scheduleImaginePostDeleteAllButtonSync);
     
     // Track which video is in fullscreen for workaround
     let lastFullscreenVideo = null;
