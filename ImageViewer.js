@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.69
+// @name         Image Fullscreen Toggle v1.71
 // @namespace    http://example.com/
-// @version      1.69
+// @version      1.71
 // @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* a fixed button deletes all post media from storage via Grok API.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -448,6 +448,8 @@
     }
 
     const IV_GROK_DELETE_ALL_BTN_ID = 'iv-grok-delete-all-media';
+    /** First tap arms the delete button; second tap runs delete. Auto-cancels after this many ms. */
+    const IV_GROK_DELETE_ARM_MS = 10000;
     /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
     const IV_GROK_DELETE_MEDIA_DEBUG = false;
     const GROK_ASSET_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -609,7 +611,8 @@
             btn = document.createElement('button');
             btn.id = IV_GROK_DELETE_ALL_BTN_ID;
             btn.type = 'button';
-            btn.title = 'Delete all media in this post from your Grok storage (same as removing each item manually). Cannot be undone.';
+            const grokDeleteIdleTitle = 'Delete all media in this post from your Grok storage (same as removing each item manually). Tap twice: first arms, second deletes. Cannot be undone.';
+            btn.title = grokDeleteIdleTitle;
             btn.textContent = '\uD83D\uDDD1';
             Object.assign(btn.style, {
                 position: 'fixed',
@@ -631,6 +634,26 @@
                 boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
                 padding: '0'
             });
+            function grokDeleteAllDisarm() {
+                clearTimeout(btn._ivGrokArmTid);
+                btn._ivGrokArmTid = null;
+                delete btn.dataset.ivGrokArmed;
+                btn.textContent = '\uD83D\uDDD1';
+                btn.title = grokDeleteIdleTitle;
+                btn.style.background = 'rgba(24,24,27,0.92)';
+                btn.style.borderColor = 'rgba(248,113,113,0.55)';
+                btn.style.color = '#f87171';
+            }
+            function grokDeleteAllArm(itemCount) {
+                btn.dataset.ivGrokArmed = '1';
+                btn.textContent = '!';
+                btn.title = 'Click again to delete all ' + itemCount + ' media item(s) now. First strip item is deleted last. Wait ' + Math.round(IV_GROK_DELETE_ARM_MS / 1000) + 's to cancel.';
+                btn.style.background = 'rgba(127,29,29,0.96)';
+                btn.style.borderColor = 'rgba(252,165,165,0.95)';
+                btn.style.color = '#fecaca';
+                clearTimeout(btn._ivGrokArmTid);
+                btn._ivGrokArmTid = setTimeout(grokDeleteAllDisarm, IV_GROK_DELETE_ARM_MS);
+            }
             btn.addEventListener('click', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -655,12 +678,16 @@
                 }
                 if (!allIds.length) {
                     alert('Image Viewer: No media IDs found in this post.');
+                    grokDeleteAllDisarm();
                     return;
                 }
+                if (btn.dataset.ivGrokArmed !== '1') {
+                    grokDeleteAllArm(allIds.length);
+                    return;
+                }
+                grokDeleteAllDisarm();
                 const ids = imaginePostMediaIdsForDelete(allIds);
-                if (!confirm('Delete all ' + allIds.length + ' media item(s) from your Grok storage?\n\nThe first item in the strip is deleted last.\n\nThis cannot be undone.')) return;
                 btn.disabled = true;
-                const prev = btn.textContent;
                 const failures = [];
                 for (let i = 0; i < ids.length; i++) {
                     const id = ids[i];
@@ -672,13 +699,13 @@
                         failures.push(id + ' (network error)');
                     }
                 }
-                btn.textContent = prev;
                 btn.disabled = false;
+                grokDeleteAllDisarm();
                 if (failures.length) {
                     const head = failures.slice(0, 12).join('\n');
                     alert('Image Viewer: Some deletes failed:\n' + head + (failures.length > 12 ? '\n…' : ''));
                 } else {
-                    alert('Image Viewer: Deleted ' + ids.length + ' media item(s) from storage.');
+                    history.back();
                 }
             });
         }
