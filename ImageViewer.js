@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.79
+// @name         Image Fullscreen Toggle v1.82
 // @namespace    http://example.com/
-// @version      1.79
-// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API.
+// @version      1.82
+// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API, plus Keep/Unkeep for the post slug (same ids as /imagine/saved); on grok.com/imagine/saved per-tile Keep/Unkeep (localStorage) and an Unkept-only filter.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -447,8 +447,200 @@
         return location.pathname.startsWith('/imagine/post/');
     }
 
+    function isGrokImagineSavedPage() {
+        return (
+            isGrokHost() &&
+            (location.pathname === '/imagine/saved' || location.pathname.startsWith('/imagine/saved/'))
+        );
+    }
+
+    const IV_GROK_SAVED_KEPT_KEY = 'ivGrokImagineSavedKeptIds';
+    const IV_GROK_SAVED_UNKEPT_FILTER_KEY = 'ivGrokImagineSavedShowUnkeptOnly';
+    const IV_GROK_SAVED_FILTER_BTN_ID = 'iv-grok-saved-kept-filter';
+
+    function grokSavedLoadKeptSet() {
+        try {
+            const raw = localStorage.getItem(IV_GROK_SAVED_KEPT_KEY);
+            if (!raw) return new Set();
+            const arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) return new Set();
+            return new Set(arr.map((x) => String(x).toLowerCase()));
+        } catch (e) {
+            return new Set();
+        }
+    }
+
+    function grokSavedStoreKeptSet(set) {
+        try {
+            localStorage.setItem(IV_GROK_SAVED_KEPT_KEY, JSON.stringify([...set].sort()));
+        } catch (e2) {}
+    }
+
+    function grokSavedLoadUnkeptOnlyFilter() {
+        try {
+            return localStorage.getItem(IV_GROK_SAVED_UNKEPT_FILTER_KEY) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function grokSavedStoreUnkeptOnlyFilter(on) {
+        try {
+            localStorage.setItem(IV_GROK_SAVED_UNKEPT_FILTER_KEY, on ? '1' : '0');
+        } catch (e) {}
+    }
+
+    function grokSavedMediaIdFromCard(card) {
+        if (!card) return null;
+        const img = card.querySelector('img[src]');
+        const fromImg = imaginePostIdFromImgElement(img);
+        if (fromImg) return fromImg;
+        const vid = card.querySelector('video');
+        return imaginePostIdFromVideoElement(vid);
+    }
+
+    function grokSavedGetGridCards() {
+        const cards = [];
+        const seen = new Set();
+        document.querySelectorAll('div.grid.w-full.select-none').forEach((grid) => {
+            grid.querySelectorAll(':scope > div').forEach((cell) => {
+                if (!cell.querySelector) return;
+                if (!cell.querySelector('img[src]') && !cell.querySelector('video')) return;
+                if (seen.has(cell)) return;
+                seen.add(cell);
+                cards.push(cell);
+            });
+        });
+        return cards;
+    }
+
+    let grokSavedKeepSyncScheduled = false;
+    function scheduleGrokImagineSavedKeepSync() {
+        if (!isGrokHost() || grokSavedKeepSyncScheduled) return;
+        grokSavedKeepSyncScheduled = true;
+        requestAnimationFrame(() => {
+            grokSavedKeepSyncScheduled = false;
+            syncGrokImagineSavedKeepUi();
+        });
+    }
+
+    function syncGrokImagineSavedKeepUi() {
+        const filterExisting = document.getElementById(IV_GROK_SAVED_FILTER_BTN_ID);
+        if (!isGrokImagineSavedPage()) {
+            if (filterExisting) filterExisting.remove();
+            document.querySelectorAll('[data-iv-grok-keep-btn]').forEach((b) => b.remove());
+            document.querySelectorAll('[data-iv-grok-saved-card]').forEach((el) => {
+                el.style.display = '';
+                delete el.dataset.ivGrokSavedCard;
+            });
+            return;
+        }
+
+        const keptSet = grokSavedLoadKeptSet();
+        const unkeptOnly = grokSavedLoadUnkeptOnlyFilter();
+
+        let filterBtn = filterExisting;
+        if (!filterBtn) {
+            filterBtn = document.createElement('button');
+            filterBtn.id = IV_GROK_SAVED_FILTER_BTN_ID;
+            filterBtn.type = 'button';
+            Object.assign(filterBtn.style, {
+                position: 'fixed',
+                top: '12px',
+                right: '16px',
+                zIndex: '2147483630',
+                padding: '6px 12px',
+                borderRadius: '9999px',
+                border: '1px solid rgba(255,255,255,0.25)',
+                background: 'rgba(24,24,27,0.92)',
+                color: '#fafafa',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: '600',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.35)'
+            });
+            filterBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                grokSavedStoreUnkeptOnlyFilter(!grokSavedLoadUnkeptOnlyFilter());
+                scheduleGrokImagineSavedKeepSync();
+            });
+            document.body.appendChild(filterBtn);
+        }
+        filterBtn.textContent = unkeptOnly ? 'Show all' : 'Unkept only';
+        filterBtn.title = unkeptOnly
+            ? 'Show every tile again.'
+            : 'Hide tiles you marked Keep. Kept tiles stay hidden until you turn this off.';
+
+        const cards = grokSavedGetGridCards();
+        for (let i = 0; i < cards.length; i++) {
+            const card = cards[i];
+            card.dataset.ivGrokSavedCard = '1';
+            const mediaId = grokSavedMediaIdFromCard(card);
+
+            if (unkeptOnly) {
+                if (mediaId && keptSet.has(mediaId)) {
+                    card.style.display = 'none';
+                } else {
+                    card.style.display = '';
+                }
+            } else {
+                card.style.display = '';
+            }
+
+            if (!mediaId) continue;
+
+            let kbtn = card.querySelector('[data-iv-grok-keep-btn]');
+            if (!kbtn) {
+                kbtn = document.createElement('button');
+                kbtn.type = 'button';
+                kbtn.dataset.ivGrokKeepBtn = '1';
+                Object.assign(kbtn.style, {
+                    position: 'absolute',
+                    top: '8px',
+                    right: '8px',
+                    zIndex: '25',
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    padding: '3px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(255,255,255,0.35)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    lineHeight: '1.2',
+                    pointerEvents: 'auto',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.4)'
+                });
+                kbtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const set = grokSavedLoadKeptSet();
+                    const mid = grokSavedMediaIdFromCard(card);
+                    if (!mid) return;
+                    if (set.has(mid)) {
+                        set.delete(mid);
+                    } else {
+                        set.add(mid);
+                    }
+                    grokSavedStoreKeptSet(set);
+                    scheduleGrokImagineSavedKeepSync();
+                });
+                card.appendChild(kbtn);
+            }
+
+            const isKept = keptSet.has(mediaId);
+            kbtn.textContent = isKept ? 'Unkeep' : 'Keep';
+            kbtn.title = isKept
+                ? 'Remove this item from your local kept list.'
+                : 'Remember this item in this browser (localStorage).';
+            kbtn.style.background = isKept ? 'rgba(22,101,52,0.9)' : 'rgba(0,0,0,0.55)';
+            kbtn.style.borderColor = isKept ? 'rgba(134,239,172,0.55)' : 'rgba(255,255,255,0.35)';
+        }
+    }
+
     const IV_GROK_DELETE_ALL_BTN_ID = 'iv-grok-delete-all-media';
     const IV_GROK_DELETE_SELECTED_BTN_ID = 'iv-grok-delete-selected-media';
+    const IV_GROK_POST_KEEP_BTN_ID = 'iv-grok-imagine-post-keep';
     /** First tap arms the delete button; second tap runs delete. Auto-cancels after this many ms. */
     const IV_GROK_DELETE_ARM_MS = 10000;
     /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
@@ -456,6 +648,13 @@
     /** true: logs layout when it changes, pointer hits in the × control area, and each click / delete step. Grok’s own console errors (CSP, GTM, i18next, etc.) are unrelated. */
     const IV_GROK_DELETE_SELECTED_DEBUG = false;
     const GROK_ASSET_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+    /** UUID in /imagine/post/<uuid> — same id as grid thumbnails for that asset. */
+    function imaginePostSlugMediaIdFromPath() {
+        if (!isPostPage()) return null;
+        const m = location.pathname.match(new RegExp('^/imagine/post/(' + GROK_ASSET_UUID + ')(?:/|$)', 'i'));
+        return m ? m[1].toLowerCase() : null;
+    }
 
     function ivLogGrokSelectedDebug(message, detail) {
         if (!IV_GROK_DELETE_SELECTED_DEBUG) return;
@@ -822,12 +1021,66 @@
     function syncImaginePostDeleteButtons() {
         const allExisting = document.getElementById(IV_GROK_DELETE_ALL_BTN_ID);
         const selExisting = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+        const keepExisting = document.getElementById(IV_GROK_POST_KEEP_BTN_ID);
         if (!isGrokHost() || !isPostPage()) {
             if (allExisting) allExisting.remove();
             teardownGrokDeleteSelectedButton(selExisting);
             if (selExisting) selExisting.remove();
+            if (keepExisting) keepExisting.remove();
             return;
         }
+
+        const postSlugId = imaginePostSlugMediaIdFromPath();
+        let keepBtn = keepExisting;
+        if (!postSlugId) {
+            if (keepBtn) keepBtn.remove();
+        } else {
+            if (!keepBtn) {
+                keepBtn = document.createElement('button');
+                keepBtn.id = IV_GROK_POST_KEEP_BTN_ID;
+                keepBtn.type = 'button';
+                Object.assign(keepBtn.style, {
+                    position: 'fixed',
+                    bottom: '148px',
+                    right: '16px',
+                    zIndex: '2147483640',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    padding: '6px 12px',
+                    borderRadius: '9999px',
+                    border: '1px solid rgba(255,255,255,0.35)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    lineHeight: '1.2',
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.35)'
+                });
+                keepBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const id = imaginePostSlugMediaIdFromPath();
+                    if (!id) return;
+                    const set = grokSavedLoadKeptSet();
+                    if (set.has(id)) {
+                        set.delete(id);
+                    } else {
+                        set.add(id);
+                    }
+                    grokSavedStoreKeptSet(set);
+                    scheduleImaginePostDeleteButtonsSync();
+                    scheduleGrokImagineSavedKeepSync();
+                });
+            }
+            const kset = grokSavedLoadKeptSet();
+            const postKept = kset.has(postSlugId);
+            keepBtn.textContent = postKept ? 'Unkeep' : 'Keep';
+            keepBtn.title = postKept
+                ? 'Remove this post from your local kept list (same list as Imagine → Saved grid).'
+                : 'Keep this post in this browser; id matches the URL slug and saved-grid tiles.';
+            keepBtn.style.background = postKept ? 'rgba(22,101,52,0.9)' : 'rgba(24,24,27,0.92)';
+            keepBtn.style.borderColor = postKept ? 'rgba(134,239,172,0.55)' : 'rgba(255,255,255,0.35)';
+            if (!keepBtn.parentElement) document.body.appendChild(keepBtn);
+        }
+
         const article = getImaginePostRoot();
         if (!article) {
             if (allExisting) allExisting.remove();
@@ -1155,6 +1408,7 @@
     const videoObserver = new MutationObserver((mutations) => {
         addFullscreenButtonsToVideos();
         scheduleImaginePostDeleteButtonsSync();
+        scheduleGrokImagineSavedKeepSync();
         // Apply shared volume to any newly added videos (only on post pages)
         if (isPostPage()) {
             for (const mutation of mutations) {
@@ -1173,18 +1427,23 @@
     if (document.body) {
         addFullscreenButtonsToVideos();
         scheduleImaginePostDeleteButtonsSync();
+        scheduleGrokImagineSavedKeepSync();
         if (isPostPage()) applySharedVolumeToAll();
         videoObserver.observe(document.body, { childList: true, subtree: true });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
             addFullscreenButtonsToVideos();
             scheduleImaginePostDeleteButtonsSync();
+            scheduleGrokImagineSavedKeepSync();
             if (isPostPage()) applySharedVolumeToAll();
             videoObserver.observe(document.body, { childList: true, subtree: true });
         });
     }
 
-    window.addEventListener('popstate', scheduleImaginePostDeleteButtonsSync);
+    window.addEventListener('popstate', () => {
+        scheduleImaginePostDeleteButtonsSync();
+        scheduleGrokImagineSavedKeepSync();
+    });
     
     // Track which video is in fullscreen for workaround
     let lastFullscreenVideo = null;
