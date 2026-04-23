@@ -1,0 +1,8 @@
+# Local HTML/JS snapshots, examples, ad-hoc helpers
+temp/
+
+# macOS
+.DS_Store
+
+# Cursor IDE (local)
+.cursor/
