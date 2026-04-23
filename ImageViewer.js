@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.71
+// @name         Image Fullscreen Toggle v1.79
 // @namespace    http://example.com/
-// @version      1.71
-// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* a fixed button deletes all post media from storage via Grok API.
+// @version      1.79
+// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -448,11 +448,52 @@
     }
 
     const IV_GROK_DELETE_ALL_BTN_ID = 'iv-grok-delete-all-media';
+    const IV_GROK_DELETE_SELECTED_BTN_ID = 'iv-grok-delete-selected-media';
     /** First tap arms the delete button; second tap runs delete. Auto-cancels after this many ms. */
     const IV_GROK_DELETE_ARM_MS = 10000;
     /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
     const IV_GROK_DELETE_MEDIA_DEBUG = false;
+    /** true: logs layout when it changes, pointer hits in the × control area, and each click / delete step. Grok’s own console errors (CSP, GTM, i18next, etc.) are unrelated. */
+    const IV_GROK_DELETE_SELECTED_DEBUG = false;
     const GROK_ASSET_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+    function ivLogGrokSelectedDebug(message, detail) {
+        if (!IV_GROK_DELETE_SELECTED_DEBUG) return;
+        if (detail !== undefined) {
+            console.log('[Image Viewer] Grok selected-delete: ' + message, detail);
+        } else {
+            console.log('[Image Viewer] Grok selected-delete: ' + message);
+        }
+    }
+
+    let ivGrokSelectedPointerDebugLast = 0;
+    document.addEventListener(
+        'pointerdown',
+        (e) => {
+            if (!IV_GROK_DELETE_SELECTED_DEBUG || !isGrokHost() || !isPostPage()) return;
+            const btn = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+            if (!btn) return;
+            const r = btn.getBoundingClientRect();
+            if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+            const now = Date.now();
+            if (now - ivGrokSelectedPointerDebugLast < 1500) return;
+            ivGrokSelectedPointerDebugLast = now;
+            let top = null;
+            let depth = 0;
+            try {
+                top = document.elementFromPoint(e.clientX, e.clientY);
+                depth = document.elementsFromPoint(e.clientX, e.clientY).length;
+            } catch (e5) {}
+            ivLogGrokSelectedDebug('pointerdown inside × bounds (see hitsOurButton)', {
+                disabled: btn.disabled,
+                topTag: top ? top.tagName : null,
+                topId: top && top.id,
+                hitsOurButton: top === btn || !!(top && btn.contains(top)),
+                elementsFromPointDepth: depth
+            });
+        },
+        true
+    );
 
     function getImaginePostRoot() {
         const hr = document.getElementById('imagine-post-page-content');
@@ -486,6 +527,93 @@
         } catch (e) {
             return null;
         }
+    }
+
+    function imaginePostIdFromImgElement(img) {
+        if (!img) return null;
+        const src = img.getAttribute('src');
+        if (src) {
+            const a = extractGrokStorageMediaIdFromUrl(src);
+            if (a) return a;
+        }
+        const ss = img.getAttribute('srcset');
+        if (ss) {
+            const first = ss.split(',')[0].trim().split(/\s+/)[0];
+            if (first) {
+                const b = extractGrokStorageMediaIdFromUrl(first);
+                if (b) return b;
+            }
+        }
+        return null;
+    }
+
+    function imaginePostIdFromVideoElement(video) {
+        if (!video) return null;
+        const tryUrl = (u) => (u && typeof u === 'string' ? extractGrokStorageMediaIdFromUrl(u) : null);
+        let id = tryUrl(video.getAttribute('poster')) || tryUrl(video.getAttribute('src'));
+        if (id) return id;
+        if (video.attributes) {
+            for (let i = 0; i < video.attributes.length; i++) {
+                const v = video.attributes[i].value;
+                if (v && (v.indexOf('https://') !== -1 || v.indexOf('http://') !== -1)) {
+                    id = tryUrl(v);
+                    if (id) return id;
+                }
+            }
+        }
+        const sources = video.querySelectorAll('source[src]');
+        for (let j = 0; j < sources.length; j++) {
+            id = tryUrl(sources[j].getAttribute('src'));
+            if (id) return id;
+        }
+        try {
+            const cs = video.currentSrc;
+            if (cs && cs.indexOf('blob:') !== 0) {
+                id = tryUrl(cs);
+                if (id) return id;
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    /** Media id for the filmstrip / hero slide the UI shows as selected. */
+    function getImaginePostSelectedMediaId(root) {
+        if (!root) return null;
+        const selectedBtn = root.querySelector('button[data-filmstrip-item="true"][tabindex="0"]');
+        if (selectedBtn) {
+            const id = imaginePostIdFromImgElement(selectedBtn.querySelector('img'));
+            if (id) return id;
+        }
+        const ringBtn = root.querySelector('button[data-filmstrip-item="true"][class*="ring-white"]');
+        if (ringBtn) {
+            const id = imaginePostIdFromImgElement(ringBtn.querySelector('img'));
+            if (id) return id;
+        }
+        const mainGrid = root.querySelector('div.group.rounded-2xl div.grid');
+        if (mainGrid) {
+            const heroImg = mainGrid.querySelector('img.col-start-1.row-start-1') || mainGrid.querySelector('img[src]');
+            const fromImg = imaginePostIdFromImgElement(heroImg);
+            if (fromImg) return fromImg;
+            const vid = mainGrid.querySelector('video');
+            const fromVid = imaginePostIdFromVideoElement(vid);
+            if (fromVid) return fromVid;
+        }
+        return null;
+    }
+
+    function hideImaginePostDomForDeletedMediaId(root, mediaId) {
+        if (!root || !mediaId) return;
+        const norm = String(mediaId).toLowerCase();
+        const hideEl = (el) => {
+            if (el && el.style) el.style.display = 'none';
+        };
+        root.querySelectorAll('button[data-filmstrip-item="true"]').forEach((btn) => {
+            const id = imaginePostIdFromImgElement(btn.querySelector('img'));
+            if (id === norm) {
+                const wrap = btn.closest('.snap-center') || btn.closest('[class*="snap-center"]');
+                hideEl(wrap || btn);
+            }
+        });
     }
 
     function collectImaginePostMediaIdsInDomOrder(root, debugRecords) {
@@ -585,28 +713,129 @@
         }).then((res) => ({ ok: res.ok, status: res.status }));
     }
 
+    function teardownGrokDeleteSelectedButton(sbtn) {
+        if (!sbtn || typeof sbtn._ivGrokTeardown !== 'function') return;
+        try {
+            sbtn._ivGrokTeardown();
+        } catch (e) {}
+        sbtn._ivGrokTeardown = null;
+    }
+
+    /** Fixed position just left of filmstrip (body host avoids overflow clipping / no hit targets). */
+    function mountGrokDeleteSelectedButton(root, sbtn) {
+        if (!root || !sbtn) return;
+        if (sbtn.parentElement !== document.body || document.body.lastElementChild !== sbtn) {
+            document.body.appendChild(sbtn);
+        }
+        const strip = root.querySelector('[data-filmstrip-scroll="true"]');
+        const btnW = 40;
+        const btnH = 40;
+        const gap = 10;
+        if (strip) {
+            const r = strip.getBoundingClientRect();
+            const left = Math.max(8, Math.round(r.left - btnW - gap));
+            const top = Math.round(r.top + r.height / 2 - btnH / 2);
+            Object.assign(sbtn.style, {
+                position: 'fixed',
+                left: left + 'px',
+                top: top + 'px',
+                right: 'auto',
+                bottom: 'auto',
+                transform: 'none',
+                zIndex: '2147483647',
+                pointerEvents: 'auto'
+            });
+            if (IV_GROK_DELETE_SELECTED_DEBUG) {
+                const snap = ['strip', Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), left, top].join(',');
+                if (snap !== sbtn._ivGrokMountDebugSnap) {
+                    sbtn._ivGrokMountDebugSnap = snap;
+                    const br = sbtn.getBoundingClientRect();
+                    const cx = Math.round(br.left + br.width / 2);
+                    const cy = Math.round(br.top + br.height / 2);
+                    let hit = null;
+                    try {
+                        hit = document.elementFromPoint(cx, cy);
+                    } catch (e4) {}
+                    ivLogGrokSelectedDebug('mount (strip path)', {
+                        stripRect: { left: r.left, top: r.top, width: r.width, height: r.height },
+                        buttonCss: { left: sbtn.style.left, top: sbtn.style.top },
+                        buttonRect: { left: br.left, top: br.top, width: br.width, height: br.height },
+                        center: { cx: cx, cy: cy },
+                        elementFromPoint: hit
+                            ? { tag: hit.tagName, id: hit.id, class: (hit.className && String(hit.className).slice(0, 120)) || '' }
+                            : null,
+                        hitIsOurButton: hit === sbtn,
+                        disabled: sbtn.disabled,
+                        pointerEvents: getComputedStyle(sbtn).pointerEvents
+                    });
+                }
+            }
+            if (!sbtn._ivGrokLayoutBound) {
+                sbtn._ivGrokLayoutBound = true;
+                const onLayout = () => {
+                    if (sbtn._ivGrokLayoutRaf != null) cancelAnimationFrame(sbtn._ivGrokLayoutRaf);
+                    sbtn._ivGrokLayoutRaf = requestAnimationFrame(() => {
+                        sbtn._ivGrokLayoutRaf = null;
+                        const art = getImaginePostRoot();
+                        const sb = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+                        if (art && sb) mountGrokDeleteSelectedButton(art, sb);
+                    });
+                };
+                window.addEventListener('resize', onLayout);
+                window.addEventListener('scroll', onLayout, true);
+                sbtn._ivGrokTeardown = () => {
+                    window.removeEventListener('resize', onLayout);
+                    window.removeEventListener('scroll', onLayout, true);
+                    if (sbtn._ivGrokLayoutRaf != null) cancelAnimationFrame(sbtn._ivGrokLayoutRaf);
+                    sbtn._ivGrokLayoutRaf = null;
+                    delete sbtn._ivGrokLayoutBound;
+                };
+            }
+        } else {
+            Object.assign(sbtn.style, {
+                position: 'fixed',
+                bottom: '144px',
+                right: '16px',
+                top: 'auto',
+                left: 'auto',
+                transform: 'none',
+                zIndex: '2147483647',
+                pointerEvents: 'auto'
+            });
+            if (IV_GROK_DELETE_SELECTED_DEBUG && sbtn._ivGrokMountDebugSnap !== 'fallback') {
+                sbtn._ivGrokMountDebugSnap = 'fallback';
+                ivLogGrokSelectedDebug('mount (fallback corner — no filmstrip node)', { path: location.pathname });
+            }
+        }
+    }
+
     let imagineDeleteBtnSyncScheduled = false;
-    function scheduleImaginePostDeleteAllButtonSync() {
+    function scheduleImaginePostDeleteButtonsSync() {
         if (!isGrokHost() || imagineDeleteBtnSyncScheduled) return;
         imagineDeleteBtnSyncScheduled = true;
         requestAnimationFrame(() => {
             imagineDeleteBtnSyncScheduled = false;
-            syncImaginePostDeleteAllButton();
+            syncImaginePostDeleteButtons();
         });
     }
 
-    function syncImaginePostDeleteAllButton() {
-        const existing = document.getElementById(IV_GROK_DELETE_ALL_BTN_ID);
+    function syncImaginePostDeleteButtons() {
+        const allExisting = document.getElementById(IV_GROK_DELETE_ALL_BTN_ID);
+        const selExisting = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
         if (!isGrokHost() || !isPostPage()) {
-            if (existing) existing.remove();
+            if (allExisting) allExisting.remove();
+            teardownGrokDeleteSelectedButton(selExisting);
+            if (selExisting) selExisting.remove();
             return;
         }
         const article = getImaginePostRoot();
         if (!article) {
-            if (existing) existing.remove();
+            if (allExisting) allExisting.remove();
+            teardownGrokDeleteSelectedButton(selExisting);
+            if (selExisting) selExisting.remove();
             return;
         }
-        let btn = existing;
+        let btn = allExisting;
         if (!btn) {
             btn = document.createElement('button');
             btn.id = IV_GROK_DELETE_ALL_BTN_ID;
@@ -710,6 +939,110 @@
             });
         }
         if (!btn.parentElement) document.body.appendChild(btn);
+
+        let sbtn = selExisting;
+        if (!sbtn) {
+            sbtn = document.createElement('button');
+            sbtn.id = IV_GROK_DELETE_SELECTED_BTN_ID;
+            sbtn.type = 'button';
+            const selIdleTitle = 'Delete only the currently selected strip item from your Grok storage. Tap twice: first arms, second deletes. Cannot be undone.';
+            sbtn.title = selIdleTitle;
+            sbtn.textContent = '\u00D7';
+            Object.assign(sbtn.style, {
+                width: '40px',
+                height: '40px',
+                borderRadius: '9999px',
+                border: '1px solid rgba(251,191,36,0.7)',
+                background: 'rgba(24,24,27,0.92)',
+                color: '#fbbf24',
+                cursor: 'pointer',
+                fontSize: '22px',
+                lineHeight: '1',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                padding: '0',
+                fontWeight: '600'
+            });
+            function grokDeleteSelectedDisarm() {
+                clearTimeout(sbtn._ivGrokSelArmTid);
+                sbtn._ivGrokSelArmTid = null;
+                delete sbtn.dataset.ivGrokSelArmed;
+                delete sbtn.dataset.ivGrokPendingDeleteId;
+                sbtn.textContent = '\u00D7';
+                sbtn.title = selIdleTitle;
+                sbtn.style.background = 'rgba(24,24,27,0.92)';
+                sbtn.style.borderColor = 'rgba(251,191,36,0.7)';
+                sbtn.style.color = '#fbbf24';
+            }
+            function grokDeleteSelectedArm() {
+                sbtn.dataset.ivGrokSelArmed = '1';
+                sbtn.textContent = '!';
+                sbtn.title = 'Click again to delete the armed media item now. Wait ' + Math.round(IV_GROK_DELETE_ARM_MS / 1000) + 's to cancel.';
+                sbtn.style.background = 'rgba(120,53,15,0.96)';
+                sbtn.style.borderColor = 'rgba(253,224,71,0.95)';
+                sbtn.style.color = '#fef9c3';
+                clearTimeout(sbtn._ivGrokSelArmTid);
+                sbtn._ivGrokSelArmTid = setTimeout(grokDeleteSelectedDisarm, IV_GROK_DELETE_ARM_MS);
+            }
+            sbtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                ivLogGrokSelectedDebug('click', {
+                    disabled: sbtn.disabled,
+                    armed: sbtn.dataset.ivGrokSelArmed === '1',
+                    pendingId: sbtn.dataset.ivGrokPendingDeleteId || null,
+                    targetTag: e.target && e.target.tagName
+                });
+                const root = getImaginePostRoot();
+                if (!root) {
+                    ivLogGrokSelectedDebug('abort: no post root (getImaginePostRoot returned null)');
+                    return;
+                }
+                if (sbtn.dataset.ivGrokSelArmed === '1') {
+                    const idToDelete = sbtn.dataset.ivGrokPendingDeleteId;
+                    grokDeleteSelectedDisarm();
+                    if (!idToDelete) {
+                        ivLogGrokSelectedDebug('armed branch: missing pending id');
+                        alert('Image Viewer: Armed delete lost its id; try again.');
+                        return;
+                    }
+                    ivLogGrokSelectedDebug('armed branch: deleting', { idToDelete: idToDelete });
+                    sbtn.disabled = true;
+                    sbtn.textContent = '\u2026';
+                    let ok = false;
+                    let status = 0;
+                    try {
+                        const r = await deleteGrokMediaPostOne(idToDelete);
+                        ok = r.ok;
+                        status = r.status;
+                    } catch (err) {
+                        ok = false;
+                        ivLogGrokSelectedDebug('fetch threw', { message: err && err.message });
+                    }
+                    ivLogGrokSelectedDebug('delete request finished', { ok: ok, status: status });
+                    sbtn.disabled = false;
+                    grokDeleteSelectedDisarm();
+                    if (!ok) {
+                        alert('Image Viewer: Delete failed (HTTP ' + status + ').');
+                    } else {
+                        hideImaginePostDomForDeletedMediaId(root, idToDelete);
+                    }
+                    return;
+                }
+                const mediaId = getImaginePostSelectedMediaId(root);
+                ivLogGrokSelectedDebug('first tap: resolved media id', { mediaId: mediaId || null });
+                if (!mediaId) {
+                    alert('Image Viewer: Could not detect a media id for the selected item (filmstrip / main preview).');
+                    grokDeleteSelectedDisarm();
+                    return;
+                }
+                sbtn.dataset.ivGrokPendingDeleteId = mediaId;
+                grokDeleteSelectedArm();
+            });
+        }
+        mountGrokDeleteSelectedButton(article, sbtn);
     }
 
     // Apply shared volume to a single video
@@ -821,7 +1154,7 @@
     // Watch for new videos being added to the page
     const videoObserver = new MutationObserver((mutations) => {
         addFullscreenButtonsToVideos();
-        scheduleImaginePostDeleteAllButtonSync();
+        scheduleImaginePostDeleteButtonsSync();
         // Apply shared volume to any newly added videos (only on post pages)
         if (isPostPage()) {
             for (const mutation of mutations) {
@@ -839,19 +1172,19 @@
     // Start observing when DOM is ready
     if (document.body) {
         addFullscreenButtonsToVideos();
-        scheduleImaginePostDeleteAllButtonSync();
+        scheduleImaginePostDeleteButtonsSync();
         if (isPostPage()) applySharedVolumeToAll();
         videoObserver.observe(document.body, { childList: true, subtree: true });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
             addFullscreenButtonsToVideos();
-            scheduleImaginePostDeleteAllButtonSync();
+            scheduleImaginePostDeleteButtonsSync();
             if (isPostPage()) applySharedVolumeToAll();
             videoObserver.observe(document.body, { childList: true, subtree: true });
         });
     }
 
-    window.addEventListener('popstate', scheduleImaginePostDeleteAllButtonSync);
+    window.addEventListener('popstate', scheduleImaginePostDeleteButtonsSync);
     
     // Track which video is in fullscreen for workaround
     let lastFullscreenVideo = null;
