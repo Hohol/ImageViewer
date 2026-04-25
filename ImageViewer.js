@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.84
+// @name         Image Fullscreen Toggle v1.85
 // @namespace    http://example.com/
-// @version      1.84
+// @version      1.85
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -50,11 +50,24 @@
         return location.hostname === 'gemini.google.com';
     }
 
+    /** Gemini inline AI results: blob on-page, or CDN (lh3.googleusercontent.com / ggpht) with same markup. */
+    function isGeminiOptInResultSrc(src) {
+        if (!src) return false;
+        if (src.startsWith('blob:https://gemini.google.com/')) return true;
+        if (!/^https?:/i.test(src)) return false;
+        try {
+            const h = new URL(src).hostname;
+            return h.endsWith('googleusercontent.com') || h.endsWith('ggpht.com');
+        } catch (e) {
+            return false;
+        }
+    }
+
     // Gemini: only inline AI-generated results (opt-in), not uploads / UI / etc.
     function isGeminiOptInImage(img) {
         if (!img || img.tagName !== 'IMG' || !isGeminiHost()) return false;
         const src = img.getAttribute('src') || img.src || '';
-        if (!src.startsWith('blob:https://gemini.google.com/')) return false;
+        if (!isGeminiOptInResultSrc(src)) return false;
         const cls = img.getAttribute('class') || '';
         if (!/\bimage\b/.test(cls) || !/\bloaded\b/.test(cls)) return false;
         const alt = img.getAttribute('alt') || '';
