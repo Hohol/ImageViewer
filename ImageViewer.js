@@ -2,7 +2,7 @@
 // @name         Image Fullscreen Toggle v1.84
 // @namespace    http://example.com/
 // @version      1.84
-// @description  Click any image on chatgpt.com to zoom+fullscreen; on gemini.google.com only AI-generated chat images (blob: gemini origin, class image loaded, alt mentions AI generated); on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API, plus Keep/Unkeep for the post slug (same ids as /imagine/saved); on grok.com/imagine/saved per-tile Keep/Unkeep (localStorage), Unkept-only filter, and short-lived hide for just-deleted media ids (localStorage cache, 10 min / 100 entries).
+// @description  Fullscreen click-to-zoom on ChatGPT; Gemini (AI blob images only) and Grok (chat + Imagine helpers). See README.md in repo.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
