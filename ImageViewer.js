@@ -2,7 +2,7 @@
 // @name         Image Fullscreen Toggle v1.84
 // @namespace    http://example.com/
 // @version      1.84
-// @description  Fullscreen click-to-zoom on ChatGPT; Gemini (AI blob images only) and Grok (chat + Imagine helpers). See README.md in repo.
+// @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
