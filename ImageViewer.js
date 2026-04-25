@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.82
+// @name         Image Fullscreen Toggle v1.83
 // @namespace    http://example.com/
-// @version      1.82
-// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API, plus Keep/Unkeep for the post slug (same ids as /imagine/saved); on grok.com/imagine/saved per-tile Keep/Unkeep (localStorage) and an Unkept-only filter.
+// @version      1.83
+// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API, plus Keep/Unkeep for the post slug (same ids as /imagine/saved); on grok.com/imagine/saved per-tile Keep/Unkeep (localStorage), Unkept-only filter, and short-lived hide for just-deleted media ids (localStorage cache, 10 min / 100 entries).
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -490,6 +490,86 @@
         } catch (e) {}
     }
 
+    /** Recently deleted media ids (same as grid / API ids); TTL + max size so localStorage stays small. */
+    const IV_GROK_RECENT_DELETED_KEY = 'ivGrokRecentlyDeletedMedia';
+    const IV_GROK_RECENT_DELETED_TTL_MS = 10 * 60 * 1000;
+    const IV_GROK_RECENT_DELETED_MAX_ENTRIES = 100;
+
+    function grokRecentlyDeletedParseRaw() {
+        try {
+            const raw = localStorage.getItem(IV_GROK_RECENT_DELETED_KEY);
+            if (!raw) return [];
+            const arr = JSON.parse(raw);
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function grokRecentlyDeletedPruneEntries(arr) {
+        const now = Date.now();
+        const ttl = IV_GROK_RECENT_DELETED_TTL_MS;
+        const fresh = [];
+        for (let i = 0; i < arr.length; i++) {
+            const e = arr[i];
+            if (!e || !e.id || typeof e.t !== 'number') continue;
+            if (now - e.t > ttl) continue;
+            fresh.push({ id: String(e.id).toLowerCase(), t: e.t });
+        }
+        const byId = new Map();
+        for (let j = 0; j < fresh.length; j++) {
+            const e = fresh[j];
+            const prev = byId.get(e.id);
+            if (!prev || e.t > prev.t) byId.set(e.id, e);
+        }
+        let out = [...byId.values()];
+        out.sort((a, b) => b.t - a.t);
+        if (out.length > IV_GROK_RECENT_DELETED_MAX_ENTRIES) {
+            out = out.slice(0, IV_GROK_RECENT_DELETED_MAX_ENTRIES);
+        }
+        return out;
+    }
+
+    function grokRecentlyDeletedPersistIfChanged(before, pruned) {
+        if (JSON.stringify(before) === JSON.stringify(pruned)) return;
+        try {
+            if (pruned.length === 0) {
+                localStorage.removeItem(IV_GROK_RECENT_DELETED_KEY);
+            } else {
+                localStorage.setItem(IV_GROK_RECENT_DELETED_KEY, JSON.stringify(pruned));
+            }
+        } catch (e2) {}
+    }
+
+    function grokRecentlyDeletedLoadSet() {
+        const raw = grokRecentlyDeletedParseRaw();
+        const pruned = grokRecentlyDeletedPruneEntries(raw);
+        grokRecentlyDeletedPersistIfChanged(raw, pruned);
+        return new Set(pruned.map((e) => e.id));
+    }
+
+    function grokRecentlyDeletedAddIds(idList) {
+        if (!idList || !idList.length) return;
+        const raw = grokRecentlyDeletedParseRaw();
+        const now = Date.now();
+        const next = raw.slice();
+        for (let i = 0; i < idList.length; i++) {
+            const id = String(idList[i] || '')
+                .trim()
+                .toLowerCase();
+            if (!id) continue;
+            next.push({ id: id, t: now });
+        }
+        const pruned = grokRecentlyDeletedPruneEntries(next);
+        try {
+            if (pruned.length === 0) {
+                localStorage.removeItem(IV_GROK_RECENT_DELETED_KEY);
+            } else {
+                localStorage.setItem(IV_GROK_RECENT_DELETED_KEY, JSON.stringify(pruned));
+            }
+        } catch (e3) {}
+    }
+
     function grokSavedMediaIdFromCard(card) {
         if (!card) return null;
         const img = card.querySelector('img[src]');
@@ -538,6 +618,7 @@
 
         const keptSet = grokSavedLoadKeptSet();
         const unkeptOnly = grokSavedLoadUnkeptOnlyFilter();
+        const recentDeleted = grokRecentlyDeletedLoadSet();
 
         let filterBtn = filterExisting;
         if (!filterBtn) {
@@ -586,6 +667,9 @@
                 }
             } else {
                 card.style.display = '';
+            }
+            if (mediaId && recentDeleted.has(mediaId)) {
+                card.style.display = 'none';
             }
 
             if (!mediaId) continue;
@@ -1171,15 +1255,21 @@
                 const ids = imaginePostMediaIdsForDelete(allIds);
                 btn.disabled = true;
                 const failures = [];
+                const deletedOk = [];
                 for (let i = 0; i < ids.length; i++) {
                     const id = ids[i];
                     btn.textContent = String(i + 1) + '/' + ids.length;
                     try {
                         const r = await deleteGrokMediaPostOne(id);
                         if (!r.ok) failures.push(id + ' (HTTP ' + r.status + ')');
+                        else deletedOk.push(id);
                     } catch (err) {
                         failures.push(id + ' (network error)');
                     }
+                }
+                if (deletedOk.length) {
+                    grokRecentlyDeletedAddIds(deletedOk);
+                    scheduleGrokImagineSavedKeepSync();
                 }
                 btn.disabled = false;
                 grokDeleteAllDisarm();
@@ -1280,6 +1370,8 @@
                     if (!ok) {
                         alert('Image Viewer: Delete failed (HTTP ' + status + ').');
                     } else {
+                        grokRecentlyDeletedAddIds([idToDelete]);
+                        scheduleGrokImagineSavedKeepSync();
                         hideImaginePostDomForDeletedMediaId(root, idToDelete);
                     }
                     return;
