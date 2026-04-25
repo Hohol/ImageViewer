@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.83
+// @name         Image Fullscreen Toggle v1.84
 // @namespace    http://example.com/
-// @version      1.83
-// @description  Click any image on chatgpt.com or gemini.google.com to zoom+fullscreen; on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API, plus Keep/Unkeep for the post slug (same ids as /imagine/saved); on grok.com/imagine/saved per-tile Keep/Unkeep (localStorage), Unkept-only filter, and short-lived hide for just-deleted media ids (localStorage cache, 10 min / 100 entries).
+// @version      1.84
+// @description  Click any image on chatgpt.com to zoom+fullscreen; on gemini.google.com only AI-generated chat images (blob: gemini origin, class image loaded, alt mentions AI generated); on grok.com only main chat generated images (group/grok-image cards) are included; Alt+F or hover button to fullscreen videos; Spacebar to pause/unpause video in fullscreen; ↑/↓ to change volume in fullscreen; Esc or click closes overlay; ←/→/Space/Meta/Alt/buttons to navigate; transparent nav buttons; Scroll button exits fullscreen and scrolls to image location; unique image navigation excluding avatars; disabled on /library pages; on grok.com/imagine/post/* fixed buttons delete all post media or only the selected strip item (two-tap arm) via Grok API, plus Keep/Unkeep for the post slug (same ids as /imagine/saved); on grok.com/imagine/saved per-tile Keep/Unkeep (localStorage), Unkept-only filter, and short-lived hide for just-deleted media ids (localStorage cache, 10 min / 100 entries).
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
@@ -46,6 +46,22 @@
         return h === 'grok.com' || h.endsWith('.grok.com');
     }
 
+    function isGeminiHost() {
+        return location.hostname === 'gemini.google.com';
+    }
+
+    // Gemini: only inline AI-generated results (opt-in), not uploads / UI / etc.
+    function isGeminiOptInImage(img) {
+        if (!img || img.tagName !== 'IMG' || !isGeminiHost()) return false;
+        const src = img.getAttribute('src') || img.src || '';
+        if (!src.startsWith('blob:https://gemini.google.com/')) return false;
+        const cls = img.getAttribute('class') || '';
+        if (!/\bimage\b/.test(cls) || !/\bloaded\b/.test(cls)) return false;
+        const alt = img.getAttribute('alt') || '';
+        if (!/AI\s+generated/i.test(alt)) return false;
+        return true;
+    }
+
     // Grok: only main chat generated images (opt-in), not thumbnails / chrome / etc.
     function isGrokOptInImage(img) {
         if (img.closest('[class*="group/grok-image"]')) return true;
@@ -74,6 +90,7 @@
     // Check if image should be skipped from navigation (avatars, previews, etc.)
     function shouldSkipImage(img) {
         if (isGrokHost() && !isGrokOptInImage(img)) return true;
+        if (isGeminiHost() && !isGeminiOptInImage(img)) return true;
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
         if (alt === 'User' || alt === 'pfp') return true;
@@ -97,7 +114,9 @@
     function isExcludedImage(img) {
         if (shouldSkipImage(img)) return true;
         if (img.closest('div.flex.flex-col.gap-2')) {
-            if (!(isGrokHost() && isGrokOptInImage(img))) return true;
+            const grokOk = isGrokHost() && isGrokOptInImage(img);
+            const geminiOk = isGeminiHost() && isGeminiOptInImage(img);
+            if (!grokOk && !geminiOk) return true;
         }
         // Skip thumbnail images in Favorites button
         if (img.closest('button[aria-label="Favorites"]')) return true;
