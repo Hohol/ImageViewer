@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.85
+// @name         Image Fullscreen Toggle v1.88
 // @namespace    http://example.com/
-// @version      1.85
+// @version      1.88
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -756,7 +756,13 @@
 
     const IV_GROK_DELETE_ALL_BTN_ID = 'iv-grok-delete-all-media';
     const IV_GROK_DELETE_SELECTED_BTN_ID = 'iv-grok-delete-selected-media';
+    const IV_GROK_DELETE_EXCEPT_BTN_ID = 'iv-grok-delete-except-first-and-selected';
     const IV_GROK_POST_KEEP_BTN_ID = 'iv-grok-imagine-post-keep';
+    const IV_GROK_UI_DELETE_ALL = 'Delete all';
+    const IV_GROK_UI_DELETE_CHOSEN = 'Delete chosen';
+    /** Shorter than “delete all except chosen”: keeps first (page order) + current strip selection. */
+    const IV_GROK_UI_DELETE_OTHERS = 'Delete others';
+    const IV_GROK_UI_CONFIRM = 'Confirm';
     /** First tap arms the delete button; second tap runs delete. Auto-cancels after this many ms. */
     const IV_GROK_DELETE_ARM_MS = 10000;
     /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
@@ -1043,9 +1049,10 @@
             document.body.appendChild(sbtn);
         }
         const strip = root.querySelector('[data-filmstrip-scroll="true"]');
-        const btnW = 40;
-        const btnH = 40;
         const gap = 10;
+        const br0 = sbtn.getBoundingClientRect();
+        const btnW = Math.max(40, Math.ceil(br0.width) || sbtn.offsetWidth || 120);
+        const btnH = Math.max(36, Math.ceil(br0.height) || sbtn.offsetHeight || 36);
         if (strip) {
             const r = strip.getBoundingClientRect();
             const left = Math.max(8, Math.round(r.left - btnW - gap));
@@ -1137,11 +1144,13 @@
     function syncImaginePostDeleteButtons() {
         const allExisting = document.getElementById(IV_GROK_DELETE_ALL_BTN_ID);
         const selExisting = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+        const exceptExisting = document.getElementById(IV_GROK_DELETE_EXCEPT_BTN_ID);
         const keepExisting = document.getElementById(IV_GROK_POST_KEEP_BTN_ID);
         if (!isGrokHost() || !isPostPage()) {
             if (allExisting) allExisting.remove();
             teardownGrokDeleteSelectedButton(selExisting);
             if (selExisting) selExisting.remove();
+            if (exceptExisting) exceptExisting.remove();
             if (keepExisting) keepExisting.remove();
             return;
         }
@@ -1202,6 +1211,7 @@
             if (allExisting) allExisting.remove();
             teardownGrokDeleteSelectedButton(selExisting);
             if (selExisting) selExisting.remove();
+            if (exceptExisting) exceptExisting.remove();
             return;
         }
         let btn = allExisting;
@@ -1209,34 +1219,39 @@
             btn = document.createElement('button');
             btn.id = IV_GROK_DELETE_ALL_BTN_ID;
             btn.type = 'button';
-            const grokDeleteIdleTitle = 'Delete all media in this post from your Grok storage (same as removing each item manually). Tap twice: first arms, second deletes. Cannot be undone.';
+            const grokDeleteIdleTitle =
+                IV_GROK_UI_DELETE_ALL +
+                ': remove every media item in this post from Grok storage. Tap twice (second tap shows Confirm). Cannot be undone.';
             btn.title = grokDeleteIdleTitle;
-            btn.textContent = '\uD83D\uDDD1';
+            btn.textContent = IV_GROK_UI_DELETE_ALL;
             Object.assign(btn.style, {
                 position: 'fixed',
                 bottom: '96px',
                 right: '16px',
                 zIndex: '2147483640',
-                width: '40px',
-                height: '40px',
+                width: 'auto',
+                maxWidth: 'min(220px, calc(100vw - 32px))',
+                minHeight: '36px',
+                padding: '8px 14px',
                 borderRadius: '9999px',
                 border: '1px solid rgba(248,113,113,0.55)',
                 background: 'rgba(24,24,27,0.92)',
                 color: '#f87171',
                 cursor: 'pointer',
-                fontSize: '18px',
-                lineHeight: '1',
+                fontSize: '12px',
+                fontWeight: '600',
+                lineHeight: '1.2',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
-                padding: '0'
+                whiteSpace: 'nowrap'
             });
             function grokDeleteAllDisarm() {
                 clearTimeout(btn._ivGrokArmTid);
                 btn._ivGrokArmTid = null;
                 delete btn.dataset.ivGrokArmed;
-                btn.textContent = '\uD83D\uDDD1';
+                btn.textContent = IV_GROK_UI_DELETE_ALL;
                 btn.title = grokDeleteIdleTitle;
                 btn.style.background = 'rgba(24,24,27,0.92)';
                 btn.style.borderColor = 'rgba(248,113,113,0.55)';
@@ -1244,8 +1259,13 @@
             }
             function grokDeleteAllArm(itemCount) {
                 btn.dataset.ivGrokArmed = '1';
-                btn.textContent = '!';
-                btn.title = 'Click again to delete all ' + itemCount + ' media item(s) now. First strip item is deleted last. Wait ' + Math.round(IV_GROK_DELETE_ARM_MS / 1000) + 's to cancel.';
+                btn.textContent = IV_GROK_UI_CONFIRM;
+                btn.title =
+                    'Click again to delete all ' +
+                    itemCount +
+                    ' media item(s) now. First item (page order) is removed last. Wait ' +
+                    Math.round(IV_GROK_DELETE_ARM_MS / 1000) +
+                    's to cancel.';
                 btn.style.background = 'rgba(127,29,29,0.96)';
                 btn.style.borderColor = 'rgba(252,165,165,0.95)';
                 btn.style.color = '#fecaca';
@@ -1315,37 +1335,168 @@
         }
         if (!btn.parentElement) document.body.appendChild(btn);
 
+        let exBtn = exceptExisting;
+        if (!exBtn) {
+            exBtn = document.createElement('button');
+            exBtn.id = IV_GROK_DELETE_EXCEPT_BTN_ID;
+            exBtn.type = 'button';
+            const exceptIdleTitle =
+                IV_GROK_UI_DELETE_OTHERS +
+                ': delete all media in this post except the first (page order) and the strip item you have selected. Tap twice (second tap shows Confirm). Cannot be undone.';
+            exBtn.title = exceptIdleTitle;
+            exBtn.textContent = IV_GROK_UI_DELETE_OTHERS;
+            Object.assign(exBtn.style, {
+                position: 'fixed',
+                bottom: '44px',
+                right: '16px',
+                zIndex: '2147483640',
+                width: 'auto',
+                maxWidth: 'min(220px, calc(100vw - 32px))',
+                minHeight: '36px',
+                padding: '8px 14px',
+                borderRadius: '9999px',
+                border: '1px solid rgba(167,139,250,0.75)',
+                background: 'rgba(24,24,27,0.92)',
+                color: '#c4b5fd',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: '600',
+                lineHeight: '1.2',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                whiteSpace: 'nowrap'
+            });
+            function grokDeleteExceptDisarm() {
+                clearTimeout(exBtn._ivGrokExceptArmTid);
+                exBtn._ivGrokExceptArmTid = null;
+                delete exBtn.dataset.ivGrokArmed;
+                delete exBtn._ivGrokExceptPendingIds;
+                exBtn.textContent = IV_GROK_UI_DELETE_OTHERS;
+                exBtn.title = exceptIdleTitle;
+                exBtn.style.background = 'rgba(24,24,27,0.92)';
+                exBtn.style.borderColor = 'rgba(167,139,250,0.75)';
+                exBtn.style.color = '#c4b5fd';
+            }
+            function grokDeleteExceptArm(deleteCount) {
+                exBtn.dataset.ivGrokArmed = '1';
+                exBtn.textContent = IV_GROK_UI_CONFIRM;
+                exBtn.title =
+                    'Click again to delete ' +
+                    deleteCount +
+                    ' media item(s) now (first + chosen stay). Wait ' +
+                    Math.round(IV_GROK_DELETE_ARM_MS / 1000) +
+                    's to cancel.';
+                exBtn.style.background = 'rgba(76,29,149,0.96)';
+                exBtn.style.borderColor = 'rgba(196,181,253,0.95)';
+                exBtn.style.color = '#ede9fe';
+                clearTimeout(exBtn._ivGrokExceptArmTid);
+                exBtn._ivGrokExceptArmTid = setTimeout(grokDeleteExceptDisarm, IV_GROK_DELETE_ARM_MS);
+            }
+            exBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const root = getImaginePostRoot();
+                if (!root) return;
+                if (exBtn.dataset.ivGrokArmed === '1') {
+                    const pending = exBtn._ivGrokExceptPendingIds ? exBtn._ivGrokExceptPendingIds.slice() : null;
+                    grokDeleteExceptDisarm();
+                    if (!pending || !pending.length) {
+                        alert('Image Viewer: Armed trim lost its list; try again.');
+                        return;
+                    }
+                    exBtn.disabled = true;
+                    const failures = [];
+                    const deletedOk = [];
+                    for (let i = 0; i < pending.length; i++) {
+                        const id = pending[i];
+                        exBtn.textContent = String(i + 1) + '/' + pending.length;
+                        try {
+                            const r = await deleteGrokMediaPostOne(id);
+                            if (!r.ok) failures.push(id + ' (HTTP ' + r.status + ')');
+                            else deletedOk.push(id);
+                        } catch (err) {
+                            failures.push(id + ' (network error)');
+                        }
+                    }
+                    if (deletedOk.length) {
+                        grokRecentlyDeletedAddIds(deletedOk);
+                        scheduleGrokImagineSavedKeepSync();
+                        for (let k = 0; k < deletedOk.length; k++) {
+                            hideImaginePostDomForDeletedMediaId(root, deletedOk[k]);
+                        }
+                    }
+                    exBtn.disabled = false;
+                    grokDeleteExceptDisarm();
+                    if (failures.length) {
+                        const head = failures.slice(0, 12).join('\n');
+                        alert('Image Viewer: Some deletes failed:\n' + head + (failures.length > 12 ? '\n…' : ''));
+                    }
+                    return;
+                }
+                const debugRecords = IV_GROK_DELETE_MEDIA_DEBUG ? [] : null;
+                const allIds = collectImaginePostMediaIdsInDomOrder(root, debugRecords);
+                if (!allIds.length) {
+                    alert('Image Viewer: No media IDs found in this post.');
+                    grokDeleteExceptDisarm();
+                    return;
+                }
+                const firstId = allIds[0];
+                const selId = getImaginePostSelectedMediaId(root);
+                if (!selId) {
+                    alert('Image Viewer: Could not detect a media id for the selected item (filmstrip / main preview).');
+                    grokDeleteExceptDisarm();
+                    return;
+                }
+                const keep = new Set([firstId, selId]);
+                const toDeleteOrdered = allIds.filter((id) => !keep.has(id));
+                if (!toDeleteOrdered.length) {
+                    alert('Image Viewer: Nothing to delete; only the first item and current selection would remain.');
+                    grokDeleteExceptDisarm();
+                    return;
+                }
+                exBtn._ivGrokExceptPendingIds = imaginePostMediaIdsForDelete(toDeleteOrdered);
+                grokDeleteExceptArm(exBtn._ivGrokExceptPendingIds.length);
+            });
+        }
+        if (!exBtn.parentElement) document.body.appendChild(exBtn);
+
         let sbtn = selExisting;
         if (!sbtn) {
             sbtn = document.createElement('button');
             sbtn.id = IV_GROK_DELETE_SELECTED_BTN_ID;
             sbtn.type = 'button';
-            const selIdleTitle = 'Delete only the currently selected strip item from your Grok storage. Tap twice: first arms, second deletes. Cannot be undone.';
+            const selIdleTitle =
+                IV_GROK_UI_DELETE_CHOSEN +
+                ': remove only the strip / preview item that is selected now. Tap twice (second tap shows Confirm). Cannot be undone.';
             sbtn.title = selIdleTitle;
-            sbtn.textContent = '\u00D7';
+            sbtn.textContent = IV_GROK_UI_DELETE_CHOSEN;
             Object.assign(sbtn.style, {
-                width: '40px',
-                height: '40px',
+                width: 'auto',
+                maxWidth: 'min(220px, calc(100vw - 32px))',
+                minHeight: '36px',
+                padding: '8px 14px',
                 borderRadius: '9999px',
                 border: '1px solid rgba(251,191,36,0.7)',
                 background: 'rgba(24,24,27,0.92)',
                 color: '#fbbf24',
                 cursor: 'pointer',
-                fontSize: '22px',
-                lineHeight: '1',
+                fontSize: '12px',
+                fontWeight: '600',
+                lineHeight: '1.2',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
-                padding: '0',
-                fontWeight: '600'
+                whiteSpace: 'nowrap'
             });
             function grokDeleteSelectedDisarm() {
                 clearTimeout(sbtn._ivGrokSelArmTid);
                 sbtn._ivGrokSelArmTid = null;
                 delete sbtn.dataset.ivGrokSelArmed;
                 delete sbtn.dataset.ivGrokPendingDeleteId;
-                sbtn.textContent = '\u00D7';
+                sbtn.textContent = IV_GROK_UI_DELETE_CHOSEN;
                 sbtn.title = selIdleTitle;
                 sbtn.style.background = 'rgba(24,24,27,0.92)';
                 sbtn.style.borderColor = 'rgba(251,191,36,0.7)';
@@ -1353,8 +1504,11 @@
             }
             function grokDeleteSelectedArm() {
                 sbtn.dataset.ivGrokSelArmed = '1';
-                sbtn.textContent = '!';
-                sbtn.title = 'Click again to delete the armed media item now. Wait ' + Math.round(IV_GROK_DELETE_ARM_MS / 1000) + 's to cancel.';
+                sbtn.textContent = IV_GROK_UI_CONFIRM;
+                sbtn.title =
+                    'Click again to delete the chosen media item now. Wait ' +
+                    Math.round(IV_GROK_DELETE_ARM_MS / 1000) +
+                    's to cancel.';
                 sbtn.style.background = 'rgba(120,53,15,0.96)';
                 sbtn.style.borderColor = 'rgba(253,224,71,0.95)';
                 sbtn.style.color = '#fef9c3';
