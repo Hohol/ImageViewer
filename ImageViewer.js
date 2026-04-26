@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Image Fullscreen Toggle v1.88
+// @name         ImageViewer
 // @namespace    http://example.com/
 // @version      1.88
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
