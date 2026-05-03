@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.89
+// @version      1.90
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1845,6 +1845,57 @@
         }
     }));
 
+    function isKeyboardTypingTarget(target) {
+        let el = target;
+        if (!el || !el.nodeType) return false;
+        if (el.nodeType !== 1) {
+            el = el.parentElement;
+            if (!el) return false;
+        }
+        try {
+            return (
+                el.matches('input, textarea, select, [contenteditable="true"]') ||
+                !!el.closest('[contenteditable="true"]') ||
+                el.getAttribute('role') === 'textbox'
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /** Eligible image with largest visible viewport overlap; tie-break closer to screen center. Same filters as click. */
+    function pickBestVisibleEligibleImage() {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const cx = vw * 0.5;
+        const cy = vh * 0.5;
+        const minArea = 64;
+        let bestImg = null;
+        let bestArea = -1;
+        let bestDist = Infinity;
+        document.querySelectorAll('img').forEach((img) => {
+            if (isExcludedImage(img)) return;
+            const r = img.getBoundingClientRect();
+            const iw = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+            const ih = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+            const area = iw * ih;
+            if (area < minArea) return;
+            const sx = Math.max(r.left, 0);
+            const sy = Math.max(r.top, 0);
+            const ex = Math.min(r.right, vw);
+            const ey = Math.min(r.bottom, vh);
+            const icx = (sx + ex) * 0.5;
+            const icy = (sy + ey) * 0.5;
+            const dist = (icx - cx) * (icx - cx) + (icy - cy) * (icy - cy);
+            if (area > bestArea || (area === bestArea && dist < bestDist)) {
+                bestArea = area;
+                bestDist = dist;
+                bestImg = img;
+            }
+        });
+        return bestImg;
+    }
+
     // Find the target video for keyboard controls
     // In fullscreen: use the fullscreen video element
     // Otherwise: use the first video on the page, but only if not typing in a text field
@@ -1856,9 +1907,7 @@
             return fullscreenElement;
         }
         
-        const isTyping = e.target.matches('input, textarea, [contenteditable="true"]') || 
-                         e.target.closest('[contenteditable="true"]') ||
-                         e.target.getAttribute('role') === 'textbox';
+        const isTyping = isKeyboardTypingTarget(e.target);
         if (!isTyping) {
             return document.querySelector('video');
         }
@@ -1918,11 +1967,29 @@
     function handleVideoKeydown(e) {
         // F or / to toggle video fullscreen
         if (e.code === 'KeyF' || e.code === 'Slash') {
-            const video = getTargetVideo(e);
-            if (video) {
+            if (isKeyboardTypingTarget(e.target)) {
+                return;
+            }
+            if (overlay) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                toggleVideoFullscreen(video);
+                hideFullscreen();
+                return;
+            }
+            if (document.querySelectorAll('video').length > 0) {
+                const video = getTargetVideo(e);
+                if (video) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    toggleVideoFullscreen(video);
+                }
+                return;
+            }
+            const img = pickBestVisibleEligibleImage();
+            if (img) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                showFullscreen(img);
             }
             return;
         }
