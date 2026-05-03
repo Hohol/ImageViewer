@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.88
+// @version      1.89
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1064,7 +1064,7 @@
                 right: 'auto',
                 bottom: 'auto',
                 transform: 'none',
-                zIndex: '2147483647',
+                zIndex: '2147483640',
                 pointerEvents: 'auto'
             });
             if (IV_GROK_DELETE_SELECTED_DEBUG) {
@@ -1121,7 +1121,7 @@
                 top: 'auto',
                 left: 'auto',
                 transform: 'none',
-                zIndex: '2147483647',
+                zIndex: '2147483640',
                 pointerEvents: 'auto'
             });
             if (IV_GROK_DELETE_SELECTED_DEBUG && sbtn._ivGrokMountDebugSnap !== 'fallback') {
