@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.90
+// @version      1.91
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1965,8 +1965,11 @@
 
     // Handler for video keyboard controls
     function handleVideoKeydown(e) {
-        // F or / to toggle video fullscreen
+        // F or / to toggle video fullscreen (plain keys only — not Cmd/Ctrl/Alt+F so Find/search works)
         if (e.code === 'KeyF' || e.code === 'Slash') {
+            if (e.metaKey || e.ctrlKey || e.altKey) {
+                return;
+            }
             if (isKeyboardTypingTarget(e.target)) {
                 return;
             }
