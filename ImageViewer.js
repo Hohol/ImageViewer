@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.91
+// @version      1.93
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -63,13 +63,13 @@
         }
     }
 
-    // Gemini: only inline AI-generated results (opt-in), not uploads / UI / etc.
+    /** Gemini inline AI chat results: blob/CDN + main image class + AI alt. No longer requires class "loaded" so low-res / swap placeholders match before decode finishes. */
     function isGeminiOptInImage(img) {
         if (!img || img.tagName !== 'IMG' || !isGeminiHost()) return false;
         const src = img.getAttribute('src') || img.src || '';
         if (!isGeminiOptInResultSrc(src)) return false;
         const cls = img.getAttribute('class') || '';
-        if (!/\bimage\b/.test(cls) || !/\bloaded\b/.test(cls)) return false;
+        if (!/\bimage\b/.test(cls)) return false;
         const alt = img.getAttribute('alt') || '';
         if (!/AI\s+generated/i.test(alt)) return false;
         return true;
