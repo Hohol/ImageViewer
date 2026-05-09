@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.93
+// @version      1.97
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -40,6 +40,18 @@
     let imgs = [];
     let currentIndex = -1;
     let overlayImage = null;
+
+    /** true: DevTools console logs each step of copy-to-clipboard on fullscreen open. Set false normally. */
+    const IV_FULLSCREEN_CLIPBOARD_DEBUG = false;
+
+    function ivLogFullscreenClipboard(message, detail) {
+        if (!IV_FULLSCREEN_CLIPBOARD_DEBUG) return;
+        if (detail !== undefined) {
+            console.log('[ImageViewer] clipboard', message, detail);
+        } else {
+            console.log('[ImageViewer] clipboard', message);
+        }
+    }
 
     function isGrokHost() {
         const h = location.hostname;
@@ -216,6 +228,127 @@
         return src;
     }
 
+    /** PNG blob from pixels already decoded on the img (avoids fetch(blob:) — Gemini CSP blocks connect-src to blob URLs). */
+    async function clipboardPngBlobFromImageElement(img) {
+        try {
+            if (img.decode && typeof img.decode === 'function') {
+                await img.decode().catch(() => {});
+            }
+            const w = img.naturalWidth;
+            const h = img.naturalHeight;
+            if (!w || !h) return null;
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            ctx.drawImage(img, 0, 0);
+            return await new Promise((resolve) => {
+                canvas.toBlob((b) => resolve(b || null), 'image/png');
+            });
+        } catch (e) {
+            ivLogFullscreenClipboard('canvas→blob threw', { name: e && e.name, message: e && e.message });
+            return null;
+        }
+    }
+
+    /** Chromium clipboard image write often accepts image/png only; re-encode JPEG/WebP fetch results. */
+    async function imageBlobToPngBlob(blob) {
+        if (!blob || !blob.size) return null;
+        const t = (blob.type || '').toLowerCase();
+        if (t === 'image/png') return blob;
+        try {
+            if (typeof createImageBitmap === 'function') {
+                const bmp = await createImageBitmap(blob);
+                const canvas = document.createElement('canvas');
+                canvas.width = bmp.width;
+                canvas.height = bmp.height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return null;
+                ctx.drawImage(bmp, 0, 0);
+                if (typeof bmp.close === 'function') bmp.close();
+                return await new Promise((resolve) => {
+                    canvas.toBlob((b) => resolve(b || null), 'image/png');
+                });
+            }
+        } catch (e) {
+            ivLogFullscreenClipboard('imageBlobToPngBlob threw', { name: e && e.name, message: e && e.message });
+        }
+        return null;
+    }
+
+    /** Copy only when entering fullscreen (showFullscreen), not when navigating within the overlay. */
+    async function copyInitialFullscreenImageToClipboard(imgEl) {
+        ivLogFullscreenClipboard('start', {
+            isSecureContext: typeof window !== 'undefined' ? window.isSecureContext : null,
+            hasClipboardWrite: !!(navigator.clipboard && navigator.clipboard.write),
+            hasClipboardItem: typeof ClipboardItem !== 'undefined'
+        });
+        if (!imgEl || typeof navigator === 'undefined' || !navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+            ivLogFullscreenClipboard('abort: clipboard API missing');
+            return;
+        }
+        const rawUrl = imgEl.currentSrc || imgEl.getAttribute('src') || imgEl.src || '';
+        if (!rawUrl) {
+            ivLogFullscreenClipboard('abort: no URL on img');
+            return;
+        }
+        const url = getFullSizeGoogleUrl(rawUrl);
+        ivLogFullscreenClipboard('urls', { raw: rawUrl.length > 200 ? rawUrl.slice(0, 200) + '\u2026' : rawUrl, resolved: url.length > 200 ? url.slice(0, 200) + '\u2026' : url });
+        let blob = null;
+        let mime = 'image/png';
+
+        if (url.startsWith('blob:')) {
+            blob = await clipboardPngBlobFromImageElement(imgEl);
+            ivLogFullscreenClipboard('strategy blob URL', { via: 'canvas (fetch blocked by page CSP)', size: blob ? blob.size : 0 });
+        } else {
+            try {
+                let res = await fetch(url, { mode: 'cors', credentials: 'include', cache: 'no-store' });
+                ivLogFullscreenClipboard('fetch include', { ok: res.ok, status: res.status, type: res.type });
+                if (!res.ok) {
+                    res = await fetch(url, { mode: 'cors', credentials: 'omit', cache: 'no-store' });
+                    ivLogFullscreenClipboard('fetch omit', { ok: res.ok, status: res.status, type: res.type });
+                }
+                if (res.ok) blob = await res.blob();
+            } catch (e) {
+                ivLogFullscreenClipboard('fetch threw', { name: e && e.name, message: e && e.message });
+            }
+            if (!blob || blob.size === 0) {
+                blob = await clipboardPngBlobFromImageElement(imgEl);
+                ivLogFullscreenClipboard('strategy after fetch failed', { via: 'canvas fallback', size: blob ? blob.size : 0 });
+            } else {
+                mime = blob.type && /^image\//i.test(blob.type) ? blob.type : 'image/png';
+            }
+        }
+
+        if (!blob || blob.size === 0) {
+            ivLogFullscreenClipboard('abort: no blob', { blob: !!blob, size: blob ? blob.size : 0 });
+            return;
+        }
+        if (mime !== 'image/png') {
+            const png = await imageBlobToPngBlob(blob);
+            if (png && png.size) {
+                ivLogFullscreenClipboard('re-encoded for clipboard', { from: mime, to: 'image/png', size: png.size });
+                blob = png;
+                mime = 'image/png';
+            } else {
+                const fromEl = await clipboardPngBlobFromImageElement(imgEl);
+                if (fromEl && fromEl.size) {
+                    ivLogFullscreenClipboard('re-encode failed; used canvas from img', { size: fromEl.size });
+                    blob = fromEl;
+                    mime = 'image/png';
+                }
+            }
+        }
+        ivLogFullscreenClipboard('blob', { size: blob.size, mime: mime });
+        try {
+            await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+            ivLogFullscreenClipboard('clipboard.write OK');
+        } catch (e) {
+            ivLogFullscreenClipboard('clipboard.write failed', { name: e && e.name, message: e && e.message });
+        }
+    }
+
     // Display an image in the overlay with progressive loading (low-quality first, then high-quality)
     function displayImageInOverlay(imgEl) {
         const lowQualitySrc = imgEl.src;
@@ -336,6 +469,7 @@
         // Close overlay on click
         overlay.addEventListener('click', hideFullscreen);
         document.body.appendChild(overlay);
+        void copyInitialFullscreenImageToClipboard(img);
     }
 
     // Intercept left-click and dragstart on non-excluded images
