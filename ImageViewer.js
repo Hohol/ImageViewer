@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.97
+// @version      1.98
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -75,11 +75,25 @@
         }
     }
 
+    /**
+     * Gemini image lightbox (back button + filename title). Angular host attrs change; these classes are stable.
+     * The large img often lacks chat-inline class "image" and alt "AI generated".
+     */
+    function isGeminiImageViewerDialogImage(img) {
+        if (!img || img.tagName !== 'IMG') return false;
+        const dialog = img.closest(
+            '[role="dialog"], mat-dialog-container, .mat-mdc-dialog-container, .mat-dialog-container',
+        );
+        if (!dialog) return false;
+        return !!dialog.querySelector('.arrow-back-container') && !!dialog.querySelector('.image-title');
+    }
+
     /** Gemini inline AI chat results: blob/CDN + main image class + AI alt. No longer requires class "loaded" so low-res / swap placeholders match before decode finishes. */
     function isGeminiOptInImage(img) {
         if (!img || img.tagName !== 'IMG' || !isGeminiHost()) return false;
         const src = img.getAttribute('src') || img.src || '';
         if (!isGeminiOptInResultSrc(src)) return false;
+        if (isGeminiImageViewerDialogImage(img)) return true;
         const cls = img.getAttribute('class') || '';
         if (!/\bimage\b/.test(cls)) return false;
         const alt = img.getAttribute('alt') || '';
