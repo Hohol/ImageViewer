@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.98
+// @version      1.99
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1927,7 +1927,8 @@
                 }, 2000);
             };
             document.addEventListener('mousemove', video._onMouseMove);
-            
+            document.body.style.cursor = 'none';
+
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
                 video.dataset.originalStyle = video.style.cssText;
