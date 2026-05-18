@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      1.99
+// @version      2.04
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -41,7 +41,7 @@
     let currentIndex = -1;
     let overlayImage = null;
 
-    /** true: DevTools console logs each step of copy-to-clipboard on fullscreen open. Set false normally. */
+    /** true: DevTools console logs each step of copy-to-clipboard (C in image fullscreen). Set false normally. */
     const IV_FULLSCREEN_CLIPBOARD_DEBUG = false;
 
     function ivLogFullscreenClipboard(message, detail) {
@@ -291,8 +291,8 @@
         return null;
     }
 
-    /** Copy only when entering fullscreen (showFullscreen), not when navigating within the overlay. */
-    async function copyInitialFullscreenImageToClipboard(imgEl) {
+    /** Copy the image currently shown in the fullscreen overlay (same pipeline as fetch → PNG for Chromium). */
+    async function copyFullscreenOverlayImageToClipboard(imgEl) {
         ivLogFullscreenClipboard('start', {
             isSecureContext: typeof window !== 'undefined' ? window.isSecureContext : null,
             hasClipboardWrite: !!(navigator.clipboard && navigator.clipboard.write),
@@ -420,6 +420,14 @@
         const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
         requestFn?.call(docEl);
 
+        if (!document.getElementById('iv-image-fullscreen-chrome')) {
+            const s = document.createElement('style');
+            s.id = 'iv-image-fullscreen-chrome';
+            s.textContent =
+                'html:fullscreen,html:-webkit-full-screen,html:-moz-full-screen{outline:none!important;box-shadow:none!important}';
+            document.head.appendChild(s);
+        }
+
         // Create overlay
         overlay = document.createElement('div');
         Object.assign(overlay.style, {
@@ -483,7 +491,6 @@
         // Close overlay on click
         overlay.addEventListener('click', hideFullscreen);
         document.body.appendChild(overlay);
-        void copyInitialFullscreenImageToClipboard(img);
     }
 
     // Intercept left-click and dragstart on non-excluded images
@@ -500,13 +507,34 @@
         }
     }, true);
 
-    // Keyboard controls
+    // Keyboard controls (capture: must run before bubble and before focused textarea consumes keys)
     document.addEventListener('keydown', e => {
         if (!overlay) return;
-        if (e.key === 'Escape') { e.preventDefault(); hideFullscreen(); return; }
-        if (['ArrowRight', ' ', 'Spacebar'].includes(e.key)) { e.preventDefault(); navigate(1); }
-        else if (['ArrowLeft', 'Meta', 'Alt'].includes(e.key)) { e.preventDefault(); navigate(-1); }
-    });
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            hideFullscreen();
+            return;
+        }
+        if (
+            (e.key === 'c' || e.key === 'C') &&
+            !e.ctrlKey && !e.metaKey && !e.altKey
+        ) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (overlayImage) void copyFullscreenOverlayImageToClipboard(overlayImage);
+            return;
+        }
+        if (['ArrowRight', ' ', 'Spacebar'].includes(e.key)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            navigate(1);
+        } else if (['ArrowLeft', 'Meta', 'Alt'].includes(e.key)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            navigate(-1);
+        }
+    }, true);
 
     // Clear overlay on fullscreen exit (with browser bug workaround)
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
@@ -1889,7 +1917,7 @@
             if (loopVideo && loopVideo !== video) clearLoop();
             
             // Add keydown listener directly to video element (in case events don't bubble)
-            video.addEventListener('keydown', handleVideoKeydown, true);
+            video.addEventListener('keydown', handleViewerKeydown, true);
             
             // Hide native controls in fullscreen, but show when cursor is near bottom
             video._originalControls = video.controls;
@@ -1952,7 +1980,7 @@
             // Exited fullscreen - restore original styles and remove listeners
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
-                video.removeEventListener('keydown', handleVideoKeydown, true);
+                video.removeEventListener('keydown', handleViewerKeydown, true);
                 video.controls = video._originalControls || false;
                 delete video._originalControls;
                 if (video._onMouseMove) {
@@ -2112,8 +2140,8 @@
         loopVideoSrc = null;
     }
 
-    // Handler for video keyboard controls
-    function handleVideoKeydown(e) {
+    // Keyboard shortcuts for the viewer: video controls, image fullscreen (F), overlay vs video routing
+    function handleViewerKeydown(e) {
         // F or / to toggle video fullscreen (plain keys only — not Cmd/Ctrl/Alt+F so Find/search works)
         if (e.code === 'KeyF' || e.code === 'Slash') {
             if (e.metaKey || e.ctrlKey || e.altKey) {
@@ -2148,6 +2176,7 @@
         
         // Spacebar to pause/unpause video
         if (e.code === 'Space') {
+            if (overlay) return;
             const video = getTargetVideo(e);
             if (video) {
                 e.preventDefault();
@@ -2240,8 +2269,8 @@
     }
     
     // Listen on both window and document in capture phase
-    window.addEventListener('keydown', handleVideoKeydown, true);
-    document.addEventListener('keydown', handleVideoKeydown, true);
+    window.addEventListener('keydown', handleViewerKeydown, true);
+    document.addEventListener('keydown', handleViewerKeydown, true);
     } // End of init()
     
     // Run init when DOM is ready
