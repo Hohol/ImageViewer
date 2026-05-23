@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.04
+// @version      2.05
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2190,6 +2190,26 @@
             return;
         }
         
+        // L to toggle looping (full video; turns off custom region loop or native loop too)
+        if (e.code === 'KeyL') {
+            if (overlay) return;
+            const video = getTargetVideo(e);
+            if (video) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                const customLoopActive = loopVideo === video && loopRafId !== null;
+                if (customLoopActive || video.loop) {
+                    if (customLoopActive) clearLoop();
+                    else video.loop = false;
+                } else {
+                    loopIn = null;
+                    loopOut = null;
+                    startLooping(video);
+                }
+            }
+            return;
+        }
+
         // I to set loop in-point
         if (e.code === 'KeyI') {
             const video = getTargetVideo(e);
