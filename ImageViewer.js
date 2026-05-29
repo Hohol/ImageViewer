@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.05
+// @version      2.06
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -40,6 +40,60 @@
     let imgs = [];
     let currentIndex = -1;
     let overlayImage = null;
+    /** false: fit to viewport; true: image natural pixel size with scroll if larger */
+    let overlayFitNative = false;
+    let overlayScrollKeys = new Set();
+    let overlayScrollDir = 0;
+    let overlayScrollRaf = null;
+    let overlayScrollLastTs = 0;
+    const OVERLAY_SCROLL_PX_PER_SEC = 720;
+
+    function stopOverlayArrowScroll() {
+        overlayScrollKeys.clear();
+        overlayScrollDir = 0;
+        overlayScrollLastTs = 0;
+        if (overlayScrollRaf !== null) {
+            cancelAnimationFrame(overlayScrollRaf);
+            overlayScrollRaf = null;
+        }
+    }
+
+    function syncOverlayScrollDir() {
+        overlayScrollDir = overlayScrollKeys.has('ArrowDown')
+            ? 1
+            : overlayScrollKeys.has('ArrowUp')
+              ? -1
+              : 0;
+    }
+
+    function overlayScrollTick(ts) {
+        if (!overlay || !overlayFitNative || overlayScrollDir === 0) {
+            stopOverlayArrowScroll();
+            return;
+        }
+        if (overlay.scrollHeight <= overlay.clientHeight + 1) {
+            stopOverlayArrowScroll();
+            return;
+        }
+        if (!overlayScrollLastTs) overlayScrollLastTs = ts;
+        const dt = Math.min(0.05, (ts - overlayScrollLastTs) / 1000);
+        overlayScrollLastTs = ts;
+        const maxTop = overlay.scrollHeight - overlay.clientHeight;
+        overlay.scrollTop = Math.max(
+            0,
+            Math.min(maxTop, overlay.scrollTop + overlayScrollDir * OVERLAY_SCROLL_PX_PER_SEC * dt),
+        );
+        overlayScrollRaf = requestAnimationFrame(overlayScrollTick);
+    }
+
+    function onOverlayArrowKeyDown(key) {
+        overlayScrollKeys.add(key);
+        syncOverlayScrollDir();
+        if (overlayScrollDir && overlayScrollRaf === null) {
+            overlayScrollLastTs = 0;
+            overlayScrollRaf = requestAnimationFrame(overlayScrollTick);
+        }
+    }
 
     /** true: DevTools console logs each step of copy-to-clipboard (C in image fullscreen). Set false normally. */
     const IV_FULLSCREEN_CLIPBOARD_DEBUG = false;
@@ -170,6 +224,7 @@
 
     function clearOverlay() {
         if (!overlay) return;
+        stopOverlayArrowScroll();
         overlay.removeEventListener('click', hideFullscreen);
         overlay.remove();
         overlay = null;
@@ -363,6 +418,58 @@
         }
     }
 
+    function applyOverlayImageFitMode() {
+        if (!overlay || !overlayImage) return;
+        if (overlayFitNative) {
+            overlay.classList.add('iv-overlay-native');
+            Object.assign(overlay.style, {
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                overflow: 'auto',
+                cursor: 'default'
+            });
+            const w = overlayImage.naturalWidth;
+            const h = overlayImage.naturalHeight;
+            if (w && h) {
+                Object.assign(overlayImage.style, {
+                    maxWidth: 'none',
+                    maxHeight: 'none',
+                    width: `${w}px`,
+                    height: `${h}px`,
+                    objectFit: 'none',
+                    flexShrink: '0'
+                });
+            } else {
+                Object.assign(overlayImage.style, {
+                    maxWidth: 'none',
+                    maxHeight: 'none',
+                    width: 'auto',
+                    height: 'auto',
+                    objectFit: 'none',
+                    flexShrink: '0'
+                });
+            }
+        } else {
+            overlay.classList.remove('iv-overlay-native');
+            Object.assign(overlay.style, {
+                display: 'flex',
+                overflow: 'hidden',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'zoom-out'
+            });
+            Object.assign(overlayImage.style, {
+                maxWidth: '100%',
+                maxHeight: '100%',
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain'
+            });
+        }
+    }
+
     // Display an image in the overlay with progressive loading (low-quality first, then high-quality)
     function displayImageInOverlay(imgEl) {
         const lowQualitySrc = imgEl.src;
@@ -372,6 +479,10 @@
         // Reset aspect-ratio to prevent inherited constraints
         overlayImage.style.aspectRatio = 'auto';
         
+        const onSrcSettled = () => {
+            if (currentIndex === expectedIndex && overlayImage) applyOverlayImageFitMode();
+        };
+        
         // Show low-quality immediately, then swap to high-quality when loaded
         if (fullSizeSrc !== lowQualitySrc) {
             overlayImage.src = lowQualitySrc;
@@ -380,12 +491,14 @@
                 // Only update if we're still on the same image and overlay exists
                 if (currentIndex === expectedIndex && overlayImage) {
                     overlayImage.src = fullSizeSrc;
+                    onSrcSettled();
                 }
             };
             preloader.src = fullSizeSrc;
         } else {
             overlayImage.src = lowQualitySrc;
         }
+        onSrcSettled();
     }
 
     function navigate(delta) {
@@ -397,6 +510,7 @@
 
     function showFullscreen(img) {
         if (isExcludedImage(img)) return;
+        overlayFitNative = false;
         
         // Build unique image list by src, skipping certain images, include all others
         const allImgs = Array.from(document.querySelectorAll('img'));
@@ -424,7 +538,9 @@
             const s = document.createElement('style');
             s.id = 'iv-image-fullscreen-chrome';
             s.textContent =
-                'html:fullscreen,html:-webkit-full-screen,html:-moz-full-screen{outline:none!important;box-shadow:none!important}';
+                'html:fullscreen,html:-webkit-full-screen,html:-moz-full-screen{outline:none!important;box-shadow:none!important}' +
+                '.iv-overlay-native{scrollbar-width:none;-ms-overflow-style:none}' +
+                '.iv-overlay-native::-webkit-scrollbar{display:none}';
             document.head.appendChild(s);
         }
 
@@ -445,19 +561,13 @@
         overlayImage.removeAttribute('_ngcontent-ng-c1355997682');
         overlayImage.removeAttribute('loading');
         
-        // Set styles to stretch image to fill screen while maintaining aspect ratio
-        Object.assign(overlayImage.style, { 
-            maxWidth: '100%', 
-            maxHeight: '100%', 
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain'
-        });
+        overlayImage.addEventListener('load', applyOverlayImageFitMode);
         
         // Display the image with progressive loading
         displayImageInOverlay(img);
         
         overlay.appendChild(overlayImage);
+        applyOverlayImageFitMode();
 
         // Navigation buttons
         const createNav = (symbol, handler) => {
@@ -525,6 +635,25 @@
             if (overlayImage) void copyFullscreenOverlayImageToClipboard(overlayImage);
             return;
         }
+        if (
+            (e.key === 'r' || e.key === 'R') &&
+            !e.ctrlKey && !e.metaKey && !e.altKey
+        ) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            overlayFitNative = !overlayFitNative;
+            applyOverlayImageFitMode();
+            if (!overlayFitNative) stopOverlayArrowScroll();
+            return;
+        }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            if (overlayFitNative && overlay.scrollHeight > overlay.clientHeight + 1) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                onOverlayArrowKeyDown(e.key);
+                return;
+            }
+        }
         if (['ArrowRight', ' ', 'Spacebar'].includes(e.key)) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -534,6 +663,14 @@
             e.stopImmediatePropagation();
             navigate(-1);
         }
+    }, true);
+
+    document.addEventListener('keyup', e => {
+        if (!overlay) return;
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+        if (!overlayScrollKeys.delete(e.key)) return;
+        syncOverlayScrollDir();
+        if (!overlayScrollDir) stopOverlayArrowScroll();
     }, true);
 
     // Clear overlay on fullscreen exit (with browser bug workaround)
@@ -2266,6 +2403,7 @@
         
         // Up/Down arrows to change volume (synced across all videos only on post pages)
         if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+            if (overlay) return;
             const video = getTargetVideo(e);
             if (video) {
                 e.preventDefault();
