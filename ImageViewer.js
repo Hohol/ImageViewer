@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.06
+// @version      2.07
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -93,6 +93,57 @@
             overlayScrollLastTs = 0;
             overlayScrollRaf = requestAnimationFrame(overlayScrollTick);
         }
+    }
+
+    const IV_CURSOR_HIDE_MS = 2000;
+    let ivCursorHideTimer = null;
+    let ivCursorHideOnMove = null;
+    let ivCursorHideIsActive = null;
+    let ivCursorHideOnShow = null;
+    let ivCursorHideOnHide = null;
+
+    function stopCursorAutoHide() {
+        if (ivCursorHideOnMove) {
+            document.removeEventListener('mousemove', ivCursorHideOnMove);
+            ivCursorHideOnMove = null;
+        }
+        clearTimeout(ivCursorHideTimer);
+        ivCursorHideTimer = null;
+        ivCursorHideIsActive = null;
+        ivCursorHideOnShow = null;
+        ivCursorHideOnHide = null;
+        document.body.style.cursor = '';
+    }
+
+    function bumpCursorAutoHide() {
+        if (!ivCursorHideIsActive) return;
+        document.body.style.cursor = '';
+        ivCursorHideOnShow?.();
+        clearTimeout(ivCursorHideTimer);
+        ivCursorHideTimer = setTimeout(() => {
+            if (ivCursorHideIsActive && ivCursorHideIsActive()) {
+                document.body.style.cursor = 'none';
+                ivCursorHideOnHide?.();
+            }
+        }, IV_CURSOR_HIDE_MS);
+    }
+
+    /** @param {boolean} [attachMoveListener] false when caller registers mousemove (e.g. video controls) */
+    function startCursorAutoHide(isActive, hooks, attachMoveListener = true) {
+        stopCursorAutoHide();
+        ivCursorHideIsActive = isActive;
+        ivCursorHideOnShow = hooks?.onShow || null;
+        ivCursorHideOnHide = hooks?.onHide || null;
+        ivCursorHideOnHide?.();
+        document.body.style.cursor = 'none';
+        if (attachMoveListener) {
+            ivCursorHideOnMove = () => bumpCursorAutoHide();
+            document.addEventListener('mousemove', ivCursorHideOnMove);
+        }
+    }
+
+    function overlayCursorWhenVisible() {
+        return overlayFitNative ? 'default' : 'zoom-out';
     }
 
     /** true: DevTools console logs each step of copy-to-clipboard (C in image fullscreen). Set false normally. */
@@ -225,6 +276,7 @@
     function clearOverlay() {
         if (!overlay) return;
         stopOverlayArrowScroll();
+        stopCursorAutoHide();
         overlay.removeEventListener('click', hideFullscreen);
         overlay.remove();
         overlay = null;
@@ -420,6 +472,8 @@
 
     function applyOverlayImageFitMode() {
         if (!overlay || !overlayImage) return;
+        const overlayCursor =
+            document.body.style.cursor === 'none' ? 'none' : overlayCursorWhenVisible();
         if (overlayFitNative) {
             overlay.classList.add('iv-overlay-native');
             Object.assign(overlay.style, {
@@ -428,7 +482,7 @@
                 alignItems: 'center',
                 justifyContent: 'flex-start',
                 overflow: 'auto',
-                cursor: 'default'
+                cursor: overlayCursor
             });
             const w = overlayImage.naturalWidth;
             const h = overlayImage.naturalHeight;
@@ -458,7 +512,7 @@
                 overflow: 'hidden',
                 alignItems: 'center',
                 justifyContent: 'center',
-                cursor: 'zoom-out'
+                cursor: overlayCursor
             });
             Object.assign(overlayImage.style, {
                 maxWidth: '100%',
@@ -601,6 +655,14 @@
         // Close overlay on click
         overlay.addEventListener('click', hideFullscreen);
         document.body.appendChild(overlay);
+        startCursorAutoHide(() => !!overlay, {
+            onShow: () => {
+                if (overlay) overlay.style.cursor = overlayCursorWhenVisible();
+            },
+            onHide: () => {
+                if (overlay) overlay.style.cursor = 'none';
+            },
+        });
     }
 
     // Intercept left-click and dragstart on non-excluded images
@@ -2070,7 +2132,6 @@
                 document.head.appendChild(style);
             }
             
-            video._cursorHideTimer = null;
             video._onMouseMove = (e) => {
                 const nearBottom = e.clientY > window.innerHeight * 0.85;
                 const hideStyle = document.getElementById('iv-hide-controls');
@@ -2082,17 +2143,10 @@
                     if (hideStyle) hideStyle.disabled = false;
                     video.blur();
                 }
-                
-                document.body.style.cursor = '';
-                clearTimeout(video._cursorHideTimer);
-                video._cursorHideTimer = setTimeout(() => {
-                    if (document.fullscreenElement === video) {
-                        document.body.style.cursor = 'none';
-                    }
-                }, 2000);
+                bumpCursorAutoHide();
             };
             document.addEventListener('mousemove', video._onMouseMove);
-            document.body.style.cursor = 'none';
+            startCursorAutoHide(() => document.fullscreenElement === video, null, false);
 
             // Store original styles if not already stored
             if (!video.dataset.originalStyle) {
@@ -2114,6 +2168,7 @@
                 outline: 'none'  // Remove focus outline
             });
         } else if (!fullscreenElement) {
+            stopCursorAutoHide();
             // Exited fullscreen - restore original styles and remove listeners
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
@@ -2122,10 +2177,7 @@
                 delete video._originalControls;
                 if (video._onMouseMove) {
                     document.removeEventListener('mousemove', video._onMouseMove);
-                    clearTimeout(video._cursorHideTimer);
-                    document.body.style.cursor = '';
                     delete video._onMouseMove;
-                    delete video._cursorHideTimer;
                 }
                 const hideStyle = document.getElementById('iv-hide-controls');
                 if (hideStyle) hideStyle.remove();
