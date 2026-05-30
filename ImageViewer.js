@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.07
+// @version      2.08
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -40,7 +40,7 @@
     let imgs = [];
     let currentIndex = -1;
     let overlayImage = null;
-    /** false: fit to viewport; true: image natural pixel size with scroll if larger */
+    /** false: fit to viewport; true: natural pixels + scroll. Remembered for this page session. */
     let overlayFitNative = false;
     let overlayScrollKeys = new Set();
     let overlayScrollDir = 0;
@@ -526,6 +526,10 @@
 
     // Display an image in the overlay with progressive loading (low-quality first, then high-quality)
     function displayImageInOverlay(imgEl) {
+        if (overlay) {
+            overlay.scrollTop = 0;
+            overlay.scrollLeft = 0;
+        }
         const lowQualitySrc = imgEl.src;
         const fullSizeSrc = getFullSizeGoogleUrl(lowQualitySrc);
         const expectedIndex = currentIndex;
@@ -564,7 +568,6 @@
 
     function showFullscreen(img) {
         if (isExcludedImage(img)) return;
-        overlayFitNative = false;
         
         // Build unique image list by src, skipping certain images, include all others
         const allImgs = Array.from(document.querySelectorAll('img'));
@@ -697,10 +700,7 @@
             if (overlayImage) void copyFullscreenOverlayImageToClipboard(overlayImage);
             return;
         }
-        if (
-            (e.key === 'r' || e.key === 'R') &&
-            !e.ctrlKey && !e.metaKey && !e.altKey
-        ) {
+        if (e.code === 'Period' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             e.stopImmediatePropagation();
             overlayFitNative = !overlayFitNative;
