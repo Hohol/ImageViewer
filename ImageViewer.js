@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.10
+// @version      2.11
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1022,6 +1022,53 @@
                 }, 300);
             }
         }, 1500);
+    }
+
+    let viewerToastEl = null;
+    let viewerToastHideTimer = null;
+
+    function showViewerToast(message, holdMs = 2000) {
+        if (!viewerToastEl) {
+            viewerToastEl = document.createElement('div');
+            viewerToastEl.setAttribute('popover', 'manual');
+            Object.assign(viewerToastEl.style, {
+                position: 'fixed',
+                inset: 'auto',
+                bottom: '60px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                margin: '0',
+                border: 'none',
+                zIndex: '2147483647',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                color: 'white',
+                fontSize: '14px',
+                fontFamily: 'sans-serif',
+                transition: 'opacity 0.3s',
+                pointerEvents: 'none',
+                userSelect: 'none',
+                whiteSpace: 'nowrap',
+            });
+            document.body.appendChild(viewerToastEl);
+        }
+        viewerToastEl.textContent = message;
+        try {
+            viewerToastEl.showPopover();
+        } catch (e) {}
+        viewerToastEl.style.opacity = '1';
+        clearTimeout(viewerToastHideTimer);
+        viewerToastHideTimer = setTimeout(() => {
+            if (viewerToastEl) {
+                viewerToastEl.style.opacity = '0';
+                setTimeout(() => {
+                    try {
+                        viewerToastEl.hidePopover();
+                    } catch (e) {}
+                }, 300);
+            }
+        }, holdMs);
     }
     
     function isPostPage() {
@@ -2461,9 +2508,10 @@
     let loopVideo = null;
     let loopRafId = null;
     let loopOriginalLoop = null;
-    
+    let loopExportActive = false;
+
     function loopRafCheck() {
-        if (!loopVideo) return;
+        if (loopExportActive || !loopVideo) return;
         const start = loopIn !== null ? loopIn : 0;
         const end = loopOut !== null ? loopOut : loopVideo.duration;
         if (loopVideo.currentTime >= end || loopVideo.currentTime < start) {
@@ -2501,6 +2549,249 @@
         loopOut = null;
         loopVideo = null;
         loopVideoSrc = null;
+    }
+
+    function pauseLoopRafOnly() {
+        if (loopRafId !== null) {
+            cancelAnimationFrame(loopRafId);
+            loopRafId = null;
+        }
+    }
+
+    function resumeLoopRafOnly() {
+        if (loopVideo && loopRafId === null && !loopExportActive) {
+            loopRafId = requestAnimationFrame(loopRafCheck);
+        }
+    }
+
+    function getLoopRegionForVideo(video) {
+        if (!video || video !== loopVideo) return null;
+        const duration = video.duration;
+        if (!Number.isFinite(duration) || duration <= 0) return null;
+        const start = loopIn !== null ? loopIn : 0;
+        const end = loopOut !== null ? loopOut : duration;
+        if (end <= start + 0.05) return null;
+        return { start, end };
+    }
+
+    function pickLoopExportMimeType() {
+        if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+        const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+        for (const t of types) {
+            if (MediaRecorder.isTypeSupported(t)) return t;
+        }
+        return '';
+    }
+
+    function downloadViewerBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+
+    function waitVideoSeeked(video, time) {
+        return new Promise((resolve) => {
+            const target = Math.max(0, Math.min(video.duration || 0, time));
+            let settled = false;
+            const done = () => {
+                if (settled) return;
+                settled = true;
+                video.removeEventListener('seeked', done);
+                resolve();
+            };
+            video.addEventListener('seeked', done);
+            video.currentTime = target;
+        });
+    }
+
+    function waitVideoMetadata(video) {
+        if (video.readyState >= 1) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            video.addEventListener('loadedmetadata', () => resolve(), { once: true });
+            video.addEventListener('error', () => reject(new Error('video load failed')), { once: true });
+        });
+    }
+
+    function canCaptureStreamFromVideo(video) {
+        const fn = video.captureStream || video.mozCaptureStream;
+        if (!fn) return false;
+        try {
+            const stream = fn.call(video);
+            stream.getTracks().forEach((t) => t.stop());
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async function createBlobUrlCaptureVideo(sourceVideo) {
+        const url = sourceVideo.currentSrc || sourceVideo.getAttribute('src') || sourceVideo.src || '';
+        if (!url || url.startsWith('blob:')) return null;
+        let res;
+        try {
+            res = await fetch(url, { credentials: 'include', mode: 'cors', cache: 'force-cache' });
+            if (!res.ok) {
+                res = await fetch(url, { credentials: 'omit', mode: 'cors', cache: 'force-cache' });
+            }
+            if (!res.ok) return null;
+        } catch (e) {
+            return null;
+        }
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const v = document.createElement('video');
+        v.muted = true;
+        v.playsInline = true;
+        v.setAttribute('playsinline', '');
+        v.preload = 'auto';
+        Object.assign(v.style, {
+            position: 'fixed',
+            left: '-9999px',
+            width: '1px',
+            height: '1px',
+            opacity: '0',
+            pointerEvents: 'none',
+        });
+        document.body.appendChild(v);
+        v.src = blobUrl;
+        try {
+            await waitVideoMetadata(v);
+        } catch (e) {
+            v.remove();
+            URL.revokeObjectURL(blobUrl);
+            return null;
+        }
+        return {
+            video: v,
+            cleanup: () => {
+                v.pause();
+                v.remove();
+                URL.revokeObjectURL(blobUrl);
+            },
+        };
+    }
+
+    /** Same-origin capture from source, or hidden clone fed from fetch(blob) when cross-origin. */
+    async function resolveLoopExportCaptureVideo(sourceVideo) {
+        if (canCaptureStreamFromVideo(sourceVideo)) {
+            return { recordVideo: sourceVideo, cleanup: () => {} };
+        }
+        showViewerToast('Preparing video…', 30000);
+        const clone = await createBlobUrlCaptureVideo(sourceVideo);
+        if (!clone || !canCaptureStreamFromVideo(clone.video)) {
+            clone?.cleanup();
+            return null;
+        }
+        return { recordVideo: clone.video, cleanup: clone.cleanup };
+    }
+
+    async function exportLoopFragment(video) {
+        if (loopExportActive) return;
+        const region = getLoopRegionForVideo(video);
+        if (!region) {
+            showViewerToast('Set loop on this video first (I / O / L)');
+            return;
+        }
+        const mimeType = pickLoopExportMimeType();
+        if (!mimeType) {
+            showViewerToast('Recording not supported');
+            return;
+        }
+
+        loopExportActive = true;
+        pauseLoopRafOnly();
+        const wasPaused = video.paused;
+        const chunks = [];
+        let recorder = null;
+        let stopTimer = null;
+        let onTimeUpdate = null;
+        let mediaStream = null;
+        let recordVideo = video;
+        let releaseCapture = () => {};
+
+        const finishExport = () => {
+            loopExportActive = false;
+            if (stopTimer) clearTimeout(stopTimer);
+            if (onTimeUpdate && recordVideo) recordVideo.removeEventListener('timeupdate', onTimeUpdate);
+            if (mediaStream) {
+                mediaStream.getTracks().forEach((t) => t.stop());
+                mediaStream = null;
+            }
+            releaseCapture();
+            resumeLoopRafOnly();
+        };
+
+        try {
+            const captureTarget = await resolveLoopExportCaptureVideo(video);
+            if (!captureTarget) {
+                showViewerToast('Cannot record (cross-origin or fetch blocked)');
+                return;
+            }
+            recordVideo = captureTarget.recordVideo;
+            releaseCapture = captureTarget.cleanup;
+
+            const captureStreamFn = recordVideo.captureStream || recordVideo.mozCaptureStream;
+            if (!captureStreamFn) {
+                showViewerToast('Recording not supported');
+                return;
+            }
+
+            showViewerToast('Recording loop…', 60000);
+            mediaStream = captureStreamFn.call(recordVideo);
+            recorder = new MediaRecorder(mediaStream, { mimeType, videoBitsPerSecond: 8_000_000 });
+            recorder.ondataavailable = (ev) => {
+                if (ev.data && ev.data.size) chunks.push(ev.data);
+            };
+
+            const stopped = new Promise((resolve) => {
+                recorder.onstop = resolve;
+                recorder.onerror = resolve;
+            });
+
+            recorder.start(200);
+            await waitVideoSeeked(recordVideo, region.start);
+            await recordVideo.play();
+
+            onTimeUpdate = () => {
+                if (recordVideo.currentTime >= region.end - 0.04) {
+                    recordVideo.pause();
+                    if (recorder.state === 'recording') recorder.stop();
+                }
+            };
+            recordVideo.addEventListener('timeupdate', onTimeUpdate);
+
+            stopTimer = setTimeout(() => {
+                recordVideo.pause();
+                if (recorder.state === 'recording') recorder.stop();
+            }, (region.end - region.start + 3) * 1000);
+
+            await stopped;
+            await new Promise((r) => setTimeout(r, 80));
+
+            if (!chunks.length) {
+                showViewerToast('Recording failed');
+                return;
+            }
+
+            const baseMime = mimeType.split(';')[0] || 'video/webm';
+            const blob = new Blob(chunks, { type: baseMime });
+            const ext = baseMime.includes('webm') ? 'webm' : 'mp4';
+            downloadViewerBlob(
+                blob,
+                `loop-${Math.round(region.start * 1000)}ms-${Math.round(region.end * 1000)}ms.${ext}`,
+            );
+            showViewerToast('Saved loop clip');
+        } catch (err) {
+            console.error('[ImageViewer] loop export failed:', err);
+            showViewerToast('Recording failed');
+        } finally {
+            finishExport();
+            if (recordVideo !== video) recordVideo.pause();
+            else if (wasPaused) video.pause();
+        }
     }
 
     // Keyboard shortcuts for the viewer: video controls, image fullscreen (F), overlay vs video routing
@@ -2628,6 +2919,19 @@
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 clearLoop();
+            }
+            return;
+        }
+
+        // E: record loop region (I/O points or full video when L looping) to WebM
+        if (e.code === 'KeyE') {
+            if (overlay) return;
+            if (isKeyboardTypingTarget(e.target)) return;
+            const video = getTargetVideo(e);
+            if (video && getLoopRegionForVideo(video)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                void exportLoopFragment(video);
             }
             return;
         }
