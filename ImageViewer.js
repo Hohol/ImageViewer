@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.09
+// @version      2.10
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -836,8 +836,12 @@
 
     // Open image in new tab inline (T / middle-click); fetch→blob bypasses Content-Disposition: attachment
     document.addEventListener('auxclick', e => {
-        if (e.button !== 1 || overlay) return;
-        const img = viewerImageFromEventTarget(e.target);
+        if (e.button !== 1) return;
+        let img = viewerImageFromEventTarget(e.target);
+        if (!img && overlay && overlayImage) {
+            const hit = document.elementFromPoint(e.clientX, e.clientY);
+            if (hit === overlayImage || (hit && overlayImage.contains(hit))) img = overlayImage;
+        }
         if (!img) return;
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -860,6 +864,14 @@
             e.preventDefault();
             e.stopImmediatePropagation();
             if (overlayImage) void copyFullscreenOverlayImageToClipboard(overlayImage);
+            return;
+        }
+        if (e.code === 'KeyT' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (overlayImage && isViewerOpenInTabImageSrc(viewerImageSrcForNewTab(overlayImage))) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                void openImageInNewTabInline(overlayImage);
+            }
             return;
         }
         if (e.code === 'Period' && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -2525,7 +2537,7 @@
             return;
         }
 
-        // T: open image in new tab (inline view on ChatGPT/Grok/Gemini)
+        // T: open image in new tab (inline view on ChatGPT/Grok/Gemini; overlay uses its own keydown handler)
         if (e.code === 'KeyT') {
             if (e.metaKey || e.ctrlKey || e.altKey || overlay) return;
             let img = viewerImageFromEventTarget(e.target) || viewerImageFromPointer();
