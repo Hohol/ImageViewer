@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.08
+// @version      2.09
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -165,6 +165,153 @@
 
     function isGeminiHost() {
         return location.hostname === 'gemini.google.com';
+    }
+
+    function viewerImageSrcForNewTab(img) {
+        return img.currentSrc || img.getAttribute('src') || img.src || '';
+    }
+
+    function isViewerOpenInTabImageSrc(src) {
+        if (!src) return false;
+        return /^https?:/i.test(src) || src.startsWith('blob:');
+    }
+
+    function viewerImageFromEventTarget(target) {
+        let el = target;
+        if (!el || !el.nodeType) return null;
+        if (el.nodeType !== 1) el = el.parentElement;
+        if (!el) return null;
+        if (el.tagName !== 'IMG') el = el.closest('img');
+        if (!el || el.tagName !== 'IMG' || isExcludedImage(el)) return null;
+        return isViewerOpenInTabImageSrc(viewerImageSrcForNewTab(el)) ? el : null;
+    }
+
+    let ivLastPointerX = -1;
+    let ivLastPointerY = -1;
+
+    function viewerImageFromPointer() {
+        if (ivLastPointerX < 0 || ivLastPointerY < 0) return null;
+        return viewerImageFromEventTarget(document.elementFromPoint(ivLastPointerX, ivLastPointerY));
+    }
+
+    const imageInlineTabBlobCache = new Map();
+    const IMAGE_INLINE_TAB_BLOB_CACHE_MAX = 16;
+
+    function viewerImgMatchesUrl(img, url) {
+        return viewerImageSrcForNewTab(img) === url;
+    }
+
+    function cacheImageInlineTabBlobUrl(url, objectUrl) {
+        const prev = imageInlineTabBlobCache.get(url);
+        if (prev) URL.revokeObjectURL(prev);
+        imageInlineTabBlobCache.set(url, objectUrl);
+        while (imageInlineTabBlobCache.size > IMAGE_INLINE_TAB_BLOB_CACHE_MAX) {
+            const oldest = imageInlineTabBlobCache.keys().next().value;
+            URL.revokeObjectURL(imageInlineTabBlobCache.get(oldest));
+            imageInlineTabBlobCache.delete(oldest);
+        }
+    }
+
+    function openImageInlineLoadingTab() {
+        const html =
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Image</title>' +
+            '<style>html,body{margin:0;height:100%;background:#111;color:#888;' +
+            'display:flex;align-items:center;justify-content:center;font:14px system-ui,sans-serif}</style>' +
+            '</head><body>Loading image…</body></html>';
+        const data = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+        return window.open(data, '_blank');
+    }
+
+    function navigateImageInlineTab(tab, href) {
+        if (!tab || tab.closed) {
+            window.open(href, '_blank');
+            return;
+        }
+        try {
+            tab.location.replace(href);
+        } catch (e) {
+            try {
+                tab.location.href = href;
+            } catch (e2) {
+                window.open(href, '_blank');
+                try {
+                    tab.close();
+                } catch (e3) {}
+            }
+        }
+    }
+
+    function assignImageInlineTabBlob(tab, url, blob) {
+        let mime = (blob.type || '').toLowerCase();
+        if (!/^image\//.test(mime)) mime = 'image/jpeg';
+        const imageBlob = blob.type === mime ? blob : new Blob([blob], { type: mime });
+        const objUrl = URL.createObjectURL(imageBlob);
+        cacheImageInlineTabBlobUrl(url, objUrl);
+        navigateImageInlineTab(tab, objUrl);
+    }
+
+    async function blobFromLoadedViewerImage(img) {
+        try {
+            if (img.decode && typeof img.decode === 'function') {
+                await img.decode().catch(() => {});
+            }
+            const w = img.naturalWidth;
+            const h = img.naturalHeight;
+            if (!w || !h || w < 64 || h < 64) return null;
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            ctx.drawImage(img, 0, 0);
+            return await new Promise((resolve) => {
+                canvas.toBlob((b) => resolve(b && b.size ? b : null), 'image/jpeg', 0.92);
+            });
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function openImageInNewTabInline(img) {
+        const url = viewerImageSrcForNewTab(img);
+        if (!url) return;
+
+        const cached = imageInlineTabBlobCache.get(url);
+        if (cached) {
+            window.open(cached, '_blank');
+            return;
+        }
+
+        if (url.startsWith('blob:')) {
+            window.open(url, '_blank');
+            return;
+        }
+
+        const tab = openImageInlineLoadingTab();
+        const blobReady = (b) => b && b.size > 0;
+
+        try {
+            let blob = null;
+            if (img.complete && viewerImgMatchesUrl(img, url)) {
+                const fromPage = blobFromLoadedViewerImage(img);
+                const fromNetwork = fetch(url, { credentials: 'include' }).then((res) => {
+                    if (!res.ok) throw new Error('fetch failed');
+                    return res.blob();
+                });
+                blob = await Promise.race([
+                    fromPage.then((b) => (blobReady(b) ? b : Promise.reject())),
+                    fromNetwork.then((b) => (blobReady(b) ? b : Promise.reject())),
+                ]).catch(() => null);
+            }
+            if (!blob) {
+                const res = await fetch(url, { credentials: 'include' });
+                if (!res.ok) throw new Error('fetch failed');
+                blob = await res.blob();
+            }
+            assignImageInlineTabBlob(tab, url, blob);
+        } catch (err) {
+            navigateImageInlineTab(tab, url);
+        }
     }
 
     /** Gemini inline AI results: blob on-page, or CDN (lh3.googleusercontent.com / ggpht) with same markup. */
@@ -680,6 +827,21 @@
         if (!overlay && e.button === 0 && e.target.tagName === 'IMG' && !isExcludedImage(e.target)) {
             showFullscreen(e.target);
         }
+    }, true);
+
+    document.addEventListener('mousemove', (e) => {
+        ivLastPointerX = e.clientX;
+        ivLastPointerY = e.clientY;
+    }, true);
+
+    // Open image in new tab inline (T / middle-click); fetch→blob bypasses Content-Disposition: attachment
+    document.addEventListener('auxclick', e => {
+        if (e.button !== 1 || overlay) return;
+        const img = viewerImageFromEventTarget(e.target);
+        if (!img) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void openImageInNewTabInline(img);
     }, true);
 
     // Keyboard controls (capture: must run before bubble and before focused textarea consumes keys)
@@ -2359,6 +2521,25 @@
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 showFullscreen(img);
+            }
+            return;
+        }
+
+        // T: open image in new tab (inline view on ChatGPT/Grok/Gemini)
+        if (e.code === 'KeyT') {
+            if (e.metaKey || e.ctrlKey || e.altKey || overlay) return;
+            let img = viewerImageFromEventTarget(e.target) || viewerImageFromPointer();
+            if (!img && isKeyboardTypingTarget(e.target)) return;
+            if (!img) {
+                const best = pickBestVisibleEligibleImage();
+                if (best && isViewerOpenInTabImageSrc(viewerImageSrcForNewTab(best))) {
+                    img = best;
+                }
+            }
+            if (img) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                void openImageInNewTabInline(img);
             }
             return;
         }
