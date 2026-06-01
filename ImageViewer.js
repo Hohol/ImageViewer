@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.12
+// @version      2.13
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -47,6 +47,35 @@
     let overlayScrollRaf = null;
     let overlayScrollLastTs = 0;
     const OVERLAY_SCROLL_PX_PER_SEC = 720;
+    /** Native-mode scroll per gallery img src (restored when navigating back). */
+    const overlayNativeScrollBySrc = new Map();
+
+    function overlayNativeScrollKey(imgEl) {
+        return imgEl?.src || '';
+    }
+
+    function saveOverlayNativeScrollForCurrent() {
+        if (!overlay || !overlayFitNative || currentIndex < 0 || !imgs[currentIndex]) return;
+        const key = overlayNativeScrollKey(imgs[currentIndex]);
+        if (!key) return;
+        overlayNativeScrollBySrc.set(key, {
+            top: overlay.scrollTop,
+            left: overlay.scrollLeft,
+        });
+    }
+
+    function restoreOverlayNativeScrollForImgEl(imgEl) {
+        if (!overlay || !overlayFitNative) return;
+        const key = overlayNativeScrollKey(imgEl);
+        const pos = overlayNativeScrollBySrc.get(key);
+        const apply = () => {
+            if (!overlay || !overlayFitNative || !imgs[currentIndex]) return;
+            if (overlayNativeScrollKey(imgs[currentIndex]) !== key) return;
+            overlay.scrollTop = pos ? pos.top : 0;
+            overlay.scrollLeft = pos ? pos.left : 0;
+        };
+        requestAnimationFrame(() => requestAnimationFrame(apply));
+    }
 
     function stopOverlayArrowScroll() {
         overlayScrollKeys.clear();
@@ -424,6 +453,7 @@
         if (!overlay) return;
         stopOverlayArrowScroll();
         stopCursorAutoHide();
+        overlayNativeScrollBySrc.clear();
         overlay.removeEventListener('click', hideFullscreen);
         overlay.remove();
         overlay = null;
@@ -673,7 +703,7 @@
 
     // Display an image in the overlay with progressive loading (low-quality first, then high-quality)
     function displayImageInOverlay(imgEl) {
-        if (overlay) {
+        if (overlay && !overlayFitNative) {
             overlay.scrollTop = 0;
             overlay.scrollLeft = 0;
         }
@@ -685,7 +715,9 @@
         overlayImage.style.aspectRatio = 'auto';
         
         const onSrcSettled = () => {
-            if (currentIndex === expectedIndex && overlayImage) applyOverlayImageFitMode();
+            if (currentIndex !== expectedIndex || !overlayImage) return;
+            applyOverlayImageFitMode();
+            restoreOverlayNativeScrollForImgEl(imgEl);
         };
         
         // Show low-quality immediately, then swap to high-quality when loaded
@@ -709,6 +741,7 @@
     function navigate(delta) {
         const next = currentIndex + delta;
         if (next < 0 || next >= imgs.length) return;
+        saveOverlayNativeScrollForCurrent();
         currentIndex = next;
         displayImageInOverlay(imgs[currentIndex]);
     }
@@ -877,9 +910,14 @@
         if (e.code === 'Period' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             e.stopImmediatePropagation();
+            if (overlayFitNative) saveOverlayNativeScrollForCurrent();
             overlayFitNative = !overlayFitNative;
             applyOverlayImageFitMode();
-            if (!overlayFitNative) stopOverlayArrowScroll();
+            if (overlayFitNative && imgs[currentIndex]) {
+                restoreOverlayNativeScrollForImgEl(imgs[currentIndex]);
+            } else {
+                stopOverlayArrowScroll();
+            }
             return;
         }
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
