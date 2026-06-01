@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.11
+// @version      2.12
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2576,11 +2576,22 @@
 
     function pickLoopExportMimeType() {
         if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
-        const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+        const types = [
+            'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+            'video/mp4;codecs=avc1',
+            'video/mp4',
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm',
+        ];
         for (const t of types) {
             if (MediaRecorder.isTypeSupported(t)) return t;
         }
         return '';
+    }
+
+    function loopExportFileExt(mimeType) {
+        return /mp4/i.test(mimeType) ? 'mp4' : 'webm';
     }
 
     function downloadViewerBlob(blob, filename) {
@@ -2776,14 +2787,14 @@
                 return;
             }
 
-            const baseMime = mimeType.split(';')[0] || 'video/webm';
+            const baseMime = mimeType.split(';')[0].trim() || 'video/webm';
+            const ext = loopExportFileExt(mimeType);
             const blob = new Blob(chunks, { type: baseMime });
-            const ext = baseMime.includes('webm') ? 'webm' : 'mp4';
             downloadViewerBlob(
                 blob,
                 `loop-${Math.round(region.start * 1000)}ms-${Math.round(region.end * 1000)}ms.${ext}`,
             );
-            showViewerToast('Saved loop clip');
+            showViewerToast(`Saved loop clip (.${ext})`);
         } catch (err) {
             console.error('[ImageViewer] loop export failed:', err);
             showViewerToast('Recording failed');
@@ -2923,7 +2934,7 @@
             return;
         }
 
-        // E: record loop region (I/O points or full video when L looping) to WebM
+        // E: record loop region (I/O points or full video when L looping) to MP4 or WebM
         if (e.code === 'KeyE') {
             if (overlay) return;
             if (isKeyboardTypingTarget(e.target)) return;
