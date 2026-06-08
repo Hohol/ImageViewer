@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.13
+// @version      2.14
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -701,41 +701,59 @@
         }
     }
 
+    function mountOverlayImageElement(img) {
+        if (overlayImage && overlayImage.parentNode === overlay) {
+            overlay.replaceChild(img, overlayImage);
+        } else if (overlay) {
+            overlay.insertBefore(img, overlay.firstChild);
+        }
+        overlayImage = img;
+    }
+
     // Display an image in the overlay with progressive loading (low-quality first, then high-quality)
     function displayImageInOverlay(imgEl) {
         if (overlay && !overlayFitNative) {
             overlay.scrollTop = 0;
             overlay.scrollLeft = 0;
         }
-        const lowQualitySrc = imgEl.src;
+        const lowQualitySrc = imgEl.currentSrc || imgEl.src;
         const fullSizeSrc = getFullSizeGoogleUrl(lowQualitySrc);
         const expectedIndex = currentIndex;
-        
-        // Reset aspect-ratio to prevent inherited constraints
-        overlayImage.style.aspectRatio = 'auto';
-        
+
+        // Fresh <img> so the browser does not keep painting the previous picture while the next loads.
+        const img = document.createElement('img');
+        img.style.aspectRatio = 'auto';
+
         const onSrcSettled = () => {
-            if (currentIndex !== expectedIndex || !overlayImage) return;
+            if (currentIndex !== expectedIndex || overlayImage !== img) return;
             applyOverlayImageFitMode();
             restoreOverlayNativeScrollForImgEl(imgEl);
         };
-        
-        // Show low-quality immediately, then swap to high-quality when loaded
+        img.addEventListener('load', onSrcSettled);
+
+        mountOverlayImageElement(img);
+
+        const assignSrc = (src) => {
+            if (currentIndex !== expectedIndex || overlayImage !== img) return;
+            img.src = src;
+            if (img.complete) onSrcSettled();
+        };
+
+        // Page thumbnail already decoded — show it immediately (often same URL, memory cache).
         if (fullSizeSrc !== lowQualitySrc) {
-            overlayImage.src = lowQualitySrc;
+            assignSrc(lowQualitySrc);
             const preloader = new Image();
             preloader.onload = () => {
-                // Only update if we're still on the same image and overlay exists
-                if (currentIndex === expectedIndex && overlayImage) {
-                    overlayImage.src = fullSizeSrc;
-                    onSrcSettled();
+                if (currentIndex === expectedIndex && overlayImage === img) {
+                    assignSrc(fullSizeSrc);
                 }
             };
             preloader.src = fullSizeSrc;
         } else {
-            overlayImage.src = lowQualitySrc;
+            assignSrc(lowQualitySrc);
         }
-        onSrcSettled();
+
+        if (!img.complete) onSrcSettled();
     }
 
     function navigate(delta) {
@@ -790,20 +808,7 @@
             zIndex: 2147483647, cursor: 'zoom-out'
         });
 
-        // Create overlay image element
-        overlayImage = img.cloneNode();
-        
-        // Remove all classes/attributes that might have size restrictions
-        overlayImage.removeAttribute('class');
-        overlayImage.removeAttribute('_ngcontent-ng-c1355997682');
-        overlayImage.removeAttribute('loading');
-        
-        overlayImage.addEventListener('load', applyOverlayImageFitMode);
-        
-        // Display the image with progressive loading
         displayImageInOverlay(img);
-        
-        overlay.appendChild(overlayImage);
         applyOverlayImageFitMode();
 
         // Navigation buttons
