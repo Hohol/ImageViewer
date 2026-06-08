@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.14
+// @version      2.15
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1126,8 +1126,57 @@
     }
 
     const IV_GROK_SAVED_KEPT_KEY = 'ivGrokImagineSavedKeptIds';
-    const IV_GROK_SAVED_UNKEPT_FILTER_KEY = 'ivGrokImagineSavedShowUnkeptOnly';
-    const IV_GROK_SAVED_FILTER_BTN_ID = 'iv-grok-saved-kept-filter';
+    const IV_GROK_SAVED_KEPT_FILTER_KEY = 'ivGrokImagineSavedShowUnkeptOnly';
+    const IV_GROK_SAVED_FILTER_ROOT_ID = 'iv-grok-saved-kept-filter';
+    const GROK_SAVED_FILTER_ALL = 'all';
+    const GROK_SAVED_FILTER_UNKEPT = 'unkept';
+    const GROK_SAVED_FILTER_KEPT = 'kept';
+    const GROK_SAVED_FILTER_OPTIONS = [
+        [GROK_SAVED_FILTER_ALL, 'All'],
+        [GROK_SAVED_FILTER_UNKEPT, 'Unkept only'],
+        [GROK_SAVED_FILTER_KEPT, 'Kept only'],
+    ];
+
+    function grokSavedFilterOptionLabel(mode) {
+        for (let i = 0; i < GROK_SAVED_FILTER_OPTIONS.length; i++) {
+            if (GROK_SAVED_FILTER_OPTIONS[i][0] === mode) return GROK_SAVED_FILTER_OPTIONS[i][1];
+        }
+        return 'All';
+    }
+
+    let grokSavedFilterTriggerMinWidthPx = 0;
+
+    function grokSavedFilterMeasureTriggerMinWidth() {
+        const probe = document.createElement('button');
+        probe.type = 'button';
+        Object.assign(probe.style, {
+            position: 'absolute',
+            visibility: 'hidden',
+            pointerEvents: 'none',
+            padding: '6px 12px',
+            border: '1px solid rgba(255,255,255,0.25)',
+            fontSize: '12px',
+            fontWeight: '600',
+            lineHeight: '1.2',
+            whiteSpace: 'nowrap',
+        });
+        document.body.appendChild(probe);
+        let maxW = 0;
+        for (let i = 0; i < GROK_SAVED_FILTER_OPTIONS.length; i++) {
+            probe.textContent = `${GROK_SAVED_FILTER_OPTIONS[i][1]} ▾`;
+            maxW = Math.max(maxW, probe.offsetWidth);
+        }
+        probe.remove();
+        grokSavedFilterTriggerMinWidthPx = maxW;
+        return maxW;
+    }
+
+    function grokSavedFilterApplyTriggerWidth(triggerBtn) {
+        if (!triggerBtn) return;
+        const w = grokSavedFilterTriggerMinWidthPx || grokSavedFilterMeasureTriggerMinWidth();
+        triggerBtn.style.minWidth = `${w}px`;
+        triggerBtn.style.boxSizing = 'border-box';
+    }
 
     function grokSavedLoadKeptSet() {
         try {
@@ -1147,17 +1196,23 @@
         } catch (e2) {}
     }
 
-    function grokSavedLoadUnkeptOnlyFilter() {
+    function grokSavedLoadKeptFilterMode() {
         try {
-            return localStorage.getItem(IV_GROK_SAVED_UNKEPT_FILTER_KEY) === '1';
+            const raw = localStorage.getItem(IV_GROK_SAVED_KEPT_FILTER_KEY);
+            if (raw === '1') return GROK_SAVED_FILTER_UNKEPT;
+            if (raw === '0') return GROK_SAVED_FILTER_ALL;
+            if (raw === GROK_SAVED_FILTER_UNKEPT || raw === GROK_SAVED_FILTER_KEPT || raw === GROK_SAVED_FILTER_ALL) {
+                return raw;
+            }
+            return GROK_SAVED_FILTER_ALL;
         } catch (e) {
-            return false;
+            return GROK_SAVED_FILTER_ALL;
         }
     }
 
-    function grokSavedStoreUnkeptOnlyFilter(on) {
+    function grokSavedStoreKeptFilterMode(mode) {
         try {
-            localStorage.setItem(IV_GROK_SAVED_UNKEPT_FILTER_KEY, on ? '1' : '0');
+            localStorage.setItem(IV_GROK_SAVED_KEPT_FILTER_KEY, mode);
         } catch (e) {}
     }
 
@@ -1276,7 +1331,7 @@
     }
 
     function syncGrokImagineSavedKeepUi() {
-        const filterExisting = document.getElementById(IV_GROK_SAVED_FILTER_BTN_ID);
+        const filterExisting = document.getElementById(IV_GROK_SAVED_FILTER_ROOT_ID);
         if (!isGrokImagineSavedPage()) {
             if (filterExisting) filterExisting.remove();
             document.querySelectorAll('[data-iv-grok-keep-btn]').forEach((b) => b.remove());
@@ -1288,19 +1343,40 @@
         }
 
         const keptSet = grokSavedLoadKeptSet();
-        const unkeptOnly = grokSavedLoadUnkeptOnlyFilter();
+        const filterMode = grokSavedLoadKeptFilterMode();
         const recentDeleted = grokRecentlyDeletedLoadSet();
 
-        let filterBtn = filterExisting;
-        if (!filterBtn) {
-            filterBtn = document.createElement('button');
-            filterBtn.id = IV_GROK_SAVED_FILTER_BTN_ID;
-            filterBtn.type = 'button';
-            Object.assign(filterBtn.style, {
+        let filterRoot = filterExisting;
+        if (filterRoot && filterRoot.tagName === 'SELECT') {
+            filterRoot.remove();
+            filterRoot = null;
+        }
+        if (!document.getElementById('iv-grok-saved-filter-chrome')) {
+            const s = document.createElement('style');
+            s.id = 'iv-grok-saved-filter-chrome';
+            s.textContent =
+                '.iv-grok-filter-item{transition:background .12s ease}' +
+                '.iv-grok-filter-item:hover{background:rgba(255,255,255,0.2)!important}' +
+                '.iv-grok-filter-item.iv-grok-filter-item-active{background:rgba(255,255,255,0.12)}' +
+                '.iv-grok-filter-item.iv-grok-filter-item-active:hover{background:rgba(255,255,255,0.28)!important}';
+            document.head.appendChild(s);
+        }
+
+        if (!filterRoot) {
+            filterRoot = document.createElement('div');
+            filterRoot.id = IV_GROK_SAVED_FILTER_ROOT_ID;
+            Object.assign(filterRoot.style, {
                 position: 'fixed',
                 top: '12px',
                 right: '16px',
                 zIndex: '2147483630',
+            });
+
+            const triggerBtn = document.createElement('button');
+            triggerBtn.type = 'button';
+            triggerBtn.dataset.ivGrokSavedFilterTrigger = '1';
+            triggerBtn.title = 'Filter saved tiles by Keep status (local to this browser).';
+            Object.assign(triggerBtn.style, {
                 padding: '6px 12px',
                 borderRadius: '9999px',
                 border: '1px solid rgba(255,255,255,0.25)',
@@ -1309,20 +1385,100 @@
                 cursor: 'pointer',
                 fontSize: '12px',
                 fontWeight: '600',
-                boxShadow: '0 2px 10px rgba(0,0,0,0.35)'
+                boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                lineHeight: '1.2',
             });
-            filterBtn.addEventListener('click', (e) => {
+
+            const menu = document.createElement('div');
+            menu.dataset.ivGrokSavedFilterMenu = '1';
+            Object.assign(menu.style, {
+                display: 'none',
+                position: 'absolute',
+                top: '100%',
+                right: '0',
+                marginTop: '6px',
+                minWidth: '100%',
+                borderRadius: '12px',
+                border: '1px solid rgba(255,255,255,0.25)',
+                background: 'rgba(24,24,27,0.98)',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
+                overflow: 'hidden',
+                padding: '4px 0',
+            });
+
+            const closeMenu = () => {
+                menu.style.display = 'none';
+                document.removeEventListener('mousedown', filterRoot._ivCloseMenu, true);
+            };
+            filterRoot._ivCloseMenu = (ev) => {
+                if (filterRoot.contains(ev.target)) return;
+                closeMenu();
+            };
+
+            triggerBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                grokSavedStoreUnkeptOnlyFilter(!grokSavedLoadUnkeptOnlyFilter());
-                scheduleGrokImagineSavedKeepSync();
+                const open = menu.style.display !== 'none';
+                if (open) {
+                    closeMenu();
+                } else {
+                    menu.style.display = 'block';
+                    requestAnimationFrame(() => {
+                        document.addEventListener('mousedown', filterRoot._ivCloseMenu, true);
+                    });
+                }
             });
-            document.body.appendChild(filterBtn);
+
+            for (let oi = 0; oi < GROK_SAVED_FILTER_OPTIONS.length; oi++) {
+                const value = GROK_SAVED_FILTER_OPTIONS[oi][0];
+                const label = GROK_SAVED_FILTER_OPTIONS[oi][1];
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'iv-grok-filter-item';
+                item.dataset.ivGrokSavedFilterValue = value;
+                item.textContent = label;
+                Object.assign(item.style, {
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '8px 14px',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#fafafa',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    lineHeight: '1.2',
+                });
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeMenu();
+                    grokSavedStoreKeptFilterMode(value);
+                    scheduleGrokImagineSavedKeepSync();
+                });
+                menu.appendChild(item);
+            }
+
+            grokSavedFilterApplyTriggerWidth(triggerBtn);
+            filterRoot.appendChild(triggerBtn);
+            filterRoot.appendChild(menu);
+            document.body.appendChild(filterRoot);
         }
-        filterBtn.textContent = unkeptOnly ? 'Show all' : 'Unkept only';
-        filterBtn.title = unkeptOnly
-            ? 'Show every tile again.'
-            : 'Hide tiles you marked Keep. Kept tiles stay hidden until you turn this off.';
+
+        const triggerBtn = filterRoot.querySelector('[data-iv-grok-saved-filter-trigger]');
+        const menu = filterRoot.querySelector('[data-iv-grok-saved-filter-menu]');
+        if (triggerBtn) {
+            grokSavedFilterApplyTriggerWidth(triggerBtn);
+            triggerBtn.textContent = `${grokSavedFilterOptionLabel(filterMode)} ▾`;
+        }
+        if (menu) {
+            menu.querySelectorAll('[data-iv-grok-saved-filter-value]').forEach((item) => {
+                item.classList.add('iv-grok-filter-item');
+                item.classList.toggle('iv-grok-filter-item-active', item.dataset.ivGrokSavedFilterValue === filterMode);
+            });
+        }
 
         const cards = grokSavedGetGridCards();
         for (let i = 0; i < cards.length; i++) {
@@ -1330,12 +1486,10 @@
             card.dataset.ivGrokSavedCard = '1';
             const mediaId = grokSavedMediaIdFromCard(card);
 
-            if (unkeptOnly) {
-                if (mediaId && keptSet.has(mediaId)) {
-                    card.style.display = 'none';
-                } else {
-                    card.style.display = '';
-                }
+            if (filterMode === GROK_SAVED_FILTER_UNKEPT) {
+                card.style.display = mediaId && keptSet.has(mediaId) ? 'none' : '';
+            } else if (filterMode === GROK_SAVED_FILTER_KEPT) {
+                card.style.display = mediaId && keptSet.has(mediaId) ? '' : 'none';
             } else {
                 card.style.display = '';
             }
