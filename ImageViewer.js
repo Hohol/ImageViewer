@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.15
+// @version      2.16
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -888,6 +888,7 @@
 
     // Keyboard controls (capture: must run before bubble and before focused textarea consumes keys)
     document.addEventListener('keydown', e => {
+        if (viewerHotkeysModalBlocksKeydown(e)) return;
         if (!overlay) return;
         if (e.key === 'Escape') {
             e.preventDefault();
@@ -1112,6 +1113,178 @@
                 }, 300);
             }
         }, holdMs);
+    }
+
+    let viewerHotkeysModalEl = null;
+    let viewerHotkeysModalDismissSuppressUntil = 0;
+
+    const VIEWER_HOTKEY_SECTIONS = [
+        {
+            title: 'General',
+            items: [
+                ['H', 'Show keyboard shortcuts'],
+                ['F or /', 'Fullscreen image or video (exit image fullscreen)'],
+                ['T', 'Open image in new tab (page or fullscreen)'],
+            ],
+        },
+        {
+            title: 'Video',
+            items: [
+                ['Space', 'Play / pause'],
+                ['L', 'Toggle loop'],
+                ['I', 'Set loop in-point'],
+                ['O', 'Set loop out-point'],
+                ['Backspace', 'Clear loop points'],
+                ['E', 'Export loop region (MP4 or WebM)'],
+                ['←  →', 'Seek ±1 second'],
+                ['↑  ↓', 'Volume up / down'],
+            ],
+        },
+        {
+            title: 'Image fullscreen',
+            items: [
+                ['Esc', 'Close'],
+                ['C', 'Copy image to clipboard'],
+                ['.', 'Toggle fit screen / native resolution'],
+                ['→  Space', 'Next image'],
+                ['←  ⌘  Alt', 'Previous image'],
+                ['↑  ↓', 'Scroll (native resolution mode)'],
+            ],
+        },
+    ];
+
+    function viewerHotkeysModalBlocksKeydown(e) {
+        if (viewerHotkeysModalEl) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            dismissViewerHotkeysModal();
+            return true;
+        }
+        return performance.now() < viewerHotkeysModalDismissSuppressUntil;
+    }
+
+    function hideViewerHotkeysModal() {
+        if (viewerHotkeysModalEl) viewerHotkeysModalEl.remove();
+        viewerHotkeysModalEl = null;
+    }
+
+    function dismissViewerHotkeysModal() {
+        hideViewerHotkeysModal();
+        viewerHotkeysModalDismissSuppressUntil = performance.now() + 50;
+    }
+
+    function showViewerHotkeysModal() {
+        hideViewerHotkeysModal();
+        const root = document.createElement('div');
+        root.id = 'iv-hotkeys-modal';
+        Object.assign(root.style, {
+            position: 'fixed',
+            inset: '0',
+            zIndex: '2147483647',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+            background: 'rgba(0,0,0,0.65)',
+            boxSizing: 'border-box',
+        });
+
+        const panel = document.createElement('div');
+        Object.assign(panel.style, {
+            maxWidth: '520px',
+            width: '100%',
+            maxHeight: 'min(80vh, 640px)',
+            overflow: 'auto',
+            padding: '20px 24px',
+            borderRadius: '14px',
+            border: '1px solid rgba(255,255,255,0.2)',
+            background: 'rgba(24,24,27,0.98)',
+            color: '#fafafa',
+            fontFamily: 'system-ui,-apple-system,sans-serif',
+            fontSize: '13px',
+            lineHeight: '1.45',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+        });
+
+        const title = document.createElement('div');
+        title.textContent = 'ImageViewer shortcuts';
+        Object.assign(title.style, {
+            fontSize: '16px',
+            fontWeight: '700',
+            marginBottom: '14px',
+        });
+        panel.appendChild(title);
+
+        for (let si = 0; si < VIEWER_HOTKEY_SECTIONS.length; si++) {
+            const section = VIEWER_HOTKEY_SECTIONS[si];
+            const heading = document.createElement('div');
+            heading.textContent = section.title;
+            Object.assign(heading.style, {
+                fontSize: '11px',
+                fontWeight: '700',
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'rgba(255,255,255,0.55)',
+                marginTop: si === 0 ? '0' : '14px',
+                marginBottom: '8px',
+            });
+            panel.appendChild(heading);
+
+            for (let ii = 0; ii < section.items.length; ii++) {
+                const [keys, desc] = section.items[ii];
+                const row = document.createElement('div');
+                Object.assign(row.style, {
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: '12px',
+                    marginBottom: '6px',
+                });
+
+                const keyEl = document.createElement('span');
+                keyEl.textContent = keys;
+                Object.assign(keyEl.style, {
+                    flex: '0 0 108px',
+                    fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    color: '#e4e4e7',
+                });
+
+                const descEl = document.createElement('span');
+                descEl.textContent = desc;
+                Object.assign(descEl.style, {
+                    flex: '1',
+                    color: 'rgba(250,250,250,0.88)',
+                });
+
+                row.appendChild(keyEl);
+                row.appendChild(descEl);
+                panel.appendChild(row);
+            }
+        }
+
+        root.addEventListener('mousedown', (e) => {
+            if (e.target !== root) return;
+            e.preventDefault();
+            e.stopPropagation();
+            dismissViewerHotkeysModal();
+        });
+
+        const hint = document.createElement('div');
+        hint.textContent = 'Press any key or click outside to close';
+        Object.assign(hint.style, {
+            marginTop: '16px',
+            paddingTop: '12px',
+            borderTop: '1px solid rgba(255,255,255,0.12)',
+            fontSize: '12px',
+            color: 'rgba(255,255,255,0.45)',
+            textAlign: 'center',
+        });
+        panel.appendChild(hint);
+
+        root.appendChild(panel);
+        document.body.appendChild(root);
+        viewerHotkeysModalEl = root;
     }
     
     function isPostPage() {
@@ -3004,6 +3177,17 @@
 
     // Keyboard shortcuts for the viewer: video controls, image fullscreen (F), overlay vs video routing
     function handleViewerKeydown(e) {
+        if (viewerHotkeysModalBlocksKeydown(e)) return;
+
+        if (e.code === 'KeyH' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (!isKeyboardTypingTarget(e.target)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                showViewerHotkeysModal();
+            }
+            return;
+        }
+
         // F or / to toggle video fullscreen (plain keys only — not Cmd/Ctrl/Alt+F so Find/search works)
         if (e.code === 'KeyF' || e.code === 'Slash') {
             if (e.metaKey || e.ctrlKey || e.altKey) {
