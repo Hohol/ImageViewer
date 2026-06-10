@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.16
+// @version      2.17
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -584,13 +584,16 @@
         });
         if (!imgEl || typeof navigator === 'undefined' || !navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
             ivLogFullscreenClipboard('abort: clipboard API missing');
+            showViewerToast('Copy not supported');
             return;
         }
         const rawUrl = imgEl.currentSrc || imgEl.getAttribute('src') || imgEl.src || '';
         if (!rawUrl) {
             ivLogFullscreenClipboard('abort: no URL on img');
+            showViewerToast('Copy failed');
             return;
         }
+        showViewerToast('Copying image…', 30000);
         const url = getFullSizeGoogleUrl(rawUrl);
         ivLogFullscreenClipboard('urls', { raw: rawUrl.length > 200 ? rawUrl.slice(0, 200) + '\u2026' : rawUrl, resolved: url.length > 200 ? url.slice(0, 200) + '\u2026' : url });
         let blob = null;
@@ -621,6 +624,7 @@
 
         if (!blob || blob.size === 0) {
             ivLogFullscreenClipboard('abort: no blob', { blob: !!blob, size: blob ? blob.size : 0 });
+            showViewerToast('Copy failed');
             return;
         }
         if (mime !== 'image/png') {
@@ -642,8 +646,10 @@
         try {
             await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
             ivLogFullscreenClipboard('clipboard.write OK');
+            showViewerToast('Image copied to clipboard');
         } catch (e) {
             ivLogFullscreenClipboard('clipboard.write failed', { name: e && e.name, message: e && e.message });
+            showViewerToast('Copy failed');
         }
     }
 
@@ -1125,6 +1131,7 @@
                 ['H', 'Show keyboard shortcuts'],
                 ['F or /', 'Fullscreen image or video (exit image fullscreen)'],
                 ['T', 'Open image in new tab (page or fullscreen)'],
+                ['C', 'Copy image to clipboard (page or fullscreen)'],
             ],
         },
         {
@@ -1144,7 +1151,6 @@
             title: 'Image fullscreen',
             items: [
                 ['Esc', 'Close'],
-                ['C', 'Copy image to clipboard'],
                 ['.', 'Toggle fit screen / native resolution'],
                 ['→  Space', 'Next image'],
                 ['←  ⌘  Alt', 'Previous image'],
@@ -3238,6 +3244,20 @@
             }
             return;
         }
+
+        // C: copy image to clipboard (overlay uses its own keydown handler)
+        if (e.code === 'KeyC') {
+            if (e.metaKey || e.ctrlKey || e.altKey || overlay) return;
+            let img = viewerImageFromEventTarget(e.target) || viewerImageFromPointer();
+            if (!img && isKeyboardTypingTarget(e.target)) return;
+            if (!img) img = pickBestVisibleEligibleImage();
+            if (img) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                void copyFullscreenOverlayImageToClipboard(img);
+            }
+            return;
+        }
         
         // Spacebar to pause/unpause video
         if (e.code === 'Space') {
@@ -3266,10 +3286,12 @@
                 if (customLoopActive || video.loop) {
                     if (customLoopActive) clearLoop();
                     else video.loop = false;
+                    showViewerToast('Loop off');
                 } else {
                     loopIn = null;
                     loopOut = null;
                     startLooping(video);
+                    showViewerToast('Loop on');
                 }
             }
             return;
