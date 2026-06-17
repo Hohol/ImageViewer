@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.18
+// @version      2.19
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2019,6 +2019,100 @@
         sbtn._ivGrokTeardown = null;
     }
 
+    const IV_GROK_POST_TOOLBAR_GAP_PX = 12;
+    let grokImaginePostToolbarLayoutBound = false;
+    let grokImaginePostToolbarLayoutRaf = null;
+    let grokImaginePostToolbarResizeObs = null;
+    let grokImaginePostToolbarResizeObsTarget = null;
+
+    /** Grok post page: right rail (Share / Download / …) — keep our corner buttons left of it. */
+    function grokImaginePostDetailsAside() {
+        const article = getImaginePostRoot();
+        if (article) {
+            const local = article.querySelector('aside[aria-label="Post details"]');
+            if (local) return local;
+        }
+        return document.querySelector('aside[aria-label="Post details"]');
+    }
+
+    function grokImaginePostToolbarRightPx() {
+        const aside = grokImaginePostDetailsAside();
+        if (!aside) return 16;
+        const r = aside.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) return 16;
+        return Math.max(16, Math.round(window.innerWidth - r.left + IV_GROK_POST_TOOLBAR_GAP_PX));
+    }
+
+    function applyGrokImaginePostCornerButtonLayout() {
+        if (!isGrokHost() || !isPostPage()) return;
+        const rightPx = grokImaginePostToolbarRightPx() + 'px';
+        for (const id of [
+            IV_GROK_POST_KEEP_BTN_ID,
+            IV_GROK_DELETE_ALL_BTN_ID,
+            IV_GROK_DELETE_EXCEPT_BTN_ID,
+        ]) {
+            const el = document.getElementById(id);
+            if (el) el.style.right = rightPx;
+        }
+    }
+
+    function grokImaginePostToolbarObserveAside() {
+        if (typeof ResizeObserver === 'undefined') return;
+        const aside = grokImaginePostDetailsAside();
+        if (!aside) return;
+        if (!grokImaginePostToolbarResizeObs) {
+            grokImaginePostToolbarResizeObs = new ResizeObserver(() => {
+                scheduleImaginePostDeleteButtonsSync();
+            });
+        }
+        if (aside === grokImaginePostToolbarResizeObsTarget) return;
+        grokImaginePostToolbarResizeObs.disconnect();
+        grokImaginePostToolbarResizeObs.observe(aside);
+        grokImaginePostToolbarResizeObsTarget = aside;
+    }
+
+    function teardownGrokImaginePostToolbarLayoutBinding() {
+        if (!grokImaginePostToolbarLayoutBound) return;
+        grokImaginePostToolbarLayoutBound = false;
+        if (grokImaginePostToolbarLayoutRaf != null) {
+            cancelAnimationFrame(grokImaginePostToolbarLayoutRaf);
+            grokImaginePostToolbarLayoutRaf = null;
+        }
+        if (grokImaginePostToolbarResizeObs) {
+            grokImaginePostToolbarResizeObs.disconnect();
+            grokImaginePostToolbarResizeObs = null;
+            grokImaginePostToolbarResizeObsTarget = null;
+        }
+        if (typeof grokImaginePostToolbarOnLayout === 'function') {
+            window.removeEventListener('resize', grokImaginePostToolbarOnLayout);
+            window.removeEventListener('scroll', grokImaginePostToolbarOnLayout, true);
+            grokImaginePostToolbarOnLayout = null;
+        }
+    }
+
+    let grokImaginePostToolbarOnLayout = null;
+
+    function ensureGrokImaginePostToolbarLayoutBinding() {
+        if (grokImaginePostToolbarLayoutBound) {
+            grokImaginePostToolbarObserveAside();
+            return;
+        }
+        grokImaginePostToolbarLayoutBound = true;
+        grokImaginePostToolbarOnLayout = () => {
+            if (grokImaginePostToolbarLayoutRaf != null) cancelAnimationFrame(grokImaginePostToolbarLayoutRaf);
+            grokImaginePostToolbarLayoutRaf = requestAnimationFrame(() => {
+                grokImaginePostToolbarLayoutRaf = null;
+                applyGrokImaginePostCornerButtonLayout();
+                const art = getImaginePostRoot();
+                const sb = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+                if (art && sb) mountGrokDeleteSelectedButton(art, sb);
+            });
+        };
+        window.addEventListener('resize', grokImaginePostToolbarOnLayout);
+        window.addEventListener('scroll', grokImaginePostToolbarOnLayout, true);
+        grokImaginePostToolbarObserveAside();
+    }
+
     /** Fixed position just left of filmstrip (body host avoids overflow clipping / no hit targets). */
     function mountGrokDeleteSelectedButton(root, sbtn) {
         if (!root || !sbtn) return;
@@ -2094,7 +2188,7 @@
             Object.assign(sbtn.style, {
                 position: 'fixed',
                 bottom: '144px',
-                right: '16px',
+                right: grokImaginePostToolbarRightPx() + 'px',
                 top: 'auto',
                 left: 'auto',
                 transform: 'none',
@@ -2129,6 +2223,7 @@
             if (selExisting) selExisting.remove();
             if (exceptExisting) exceptExisting.remove();
             if (keepExisting) keepExisting.remove();
+            teardownGrokImaginePostToolbarLayoutBinding();
             return;
         }
 
@@ -2550,6 +2645,8 @@
                 grokDeleteSelectedArm();
             });
         }
+        applyGrokImaginePostCornerButtonLayout();
+        ensureGrokImaginePostToolbarLayoutBinding();
         mountGrokDeleteSelectedButton(article, sbtn);
     }
 
