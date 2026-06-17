@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.17
+// @version      2.18
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -662,13 +662,14 @@
             Object.assign(overlay.style, {
                 display: 'flex',
                 flexDirection: 'column',
-                alignItems: 'center',
+                alignItems: 'flex-start',
                 justifyContent: 'flex-start',
                 overflow: 'auto',
                 cursor: overlayCursor
             });
             const w = overlayImage.naturalWidth;
             const h = overlayImage.naturalHeight;
+            const centerHorizontally = !!(w && overlay.clientWidth > w);
             if (w && h) {
                 Object.assign(overlayImage.style, {
                     maxWidth: 'none',
@@ -676,7 +677,9 @@
                     width: `${w}px`,
                     height: `${h}px`,
                     objectFit: 'none',
-                    flexShrink: '0'
+                    flexShrink: '0',
+                    marginLeft: centerHorizontally ? 'auto' : '0',
+                    marginRight: centerHorizontally ? 'auto' : '0',
                 });
             } else {
                 Object.assign(overlayImage.style, {
@@ -685,7 +688,9 @@
                     width: 'auto',
                     height: 'auto',
                     objectFit: 'none',
-                    flexShrink: '0'
+                    flexShrink: '0',
+                    marginLeft: '0',
+                    marginRight: '0',
                 });
             }
         } else {
