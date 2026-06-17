@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.19
+// @version      2.20
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1742,6 +1742,11 @@
     const IV_GROK_UI_CONFIRM = 'Confirm';
     /** First tap arms the delete button; second tap runs delete. Auto-cancels after this many ms. */
     const IV_GROK_DELETE_ARM_MS = 10000;
+    /** Bottom-right stack (px from viewport bottom); 52px steps fit ~36px pill buttons. */
+    const IV_GROK_DELETE_EXCEPT_BOTTOM_PX = 44;
+    const IV_GROK_DELETE_ALL_BOTTOM_PX = 96;
+    const IV_GROK_POST_KEEP_BOTTOM_PX = 148;
+    const IV_GROK_FILMSTRIP_BTN_GAP_PX = 10;
     /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
     const IV_GROK_DELETE_MEDIA_DEBUG = false;
     /** true: logs layout when it changes, pointer hits in the × control area, and each click / delete step. Grok’s own console errors (CSP, GTM, i18next, etc.) are unrelated. */
@@ -1874,47 +1879,106 @@
         return null;
     }
 
-    /** Media id for the filmstrip / hero slide the UI shows as selected. */
-    function getImaginePostSelectedMediaId(root) {
+    function imaginePostFilmstripScrollEl() {
+        return document.querySelector('[data-filmstrip-scroll="true"]');
+    }
+
+    function imaginePostIdFromFilmstripButton(btn) {
+        if (!btn) return null;
+        let id = imaginePostIdFromImgElement(btn.querySelector('img'));
+        if (id) return id;
+        id = imaginePostIdFromVideoElement(btn.querySelector('video'));
+        return id || null;
+    }
+
+    function getImaginePostSelectedFilmstripButton() {
+        const strip = imaginePostFilmstripScrollEl();
+        if (!strip) return null;
+        const selected = strip.querySelector('button[data-filmstrip-item="true"][tabindex="0"]');
+        if (selected) return selected;
+        return strip.querySelector('button[data-filmstrip-item="true"][class*="ring-white"]');
+    }
+
+    function collectImaginePostFilmstripMediaIds(debugRecords) {
+        const strip = imaginePostFilmstripScrollEl();
+        if (!strip) return [];
+        const ordered = [];
+        const seen = new Set();
+        const buttons = strip.querySelectorAll('button[data-filmstrip-item="true"]');
+        for (let i = 0; i < buttons.length; i++) {
+            const btn = buttons[i];
+            const id = imaginePostIdFromFilmstripButton(btn);
+            if (debugRecords) {
+                const img = btn.querySelector('img');
+                const url = (img && img.getAttribute('src')) || '';
+                let pathname = '';
+                try {
+                    pathname = url ? new URL(url, location.href).pathname : '';
+                } catch (e2) {
+                    pathname = '(invalid URL)';
+                }
+                debugRecords.push({
+                    note: 'filmstrip[' + i + ']',
+                    url: url.length > 500 ? url.slice(0, 500) + '\u2026' : url,
+                    pathname: pathname,
+                    extractedId: id || null,
+                    duplicateId: !!(id && seen.has(id)),
+                    parserMissed: !id
+                });
+            }
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            ordered.push(id);
+        }
+        return ordered;
+    }
+
+    /** Visible hero image only — the main video player often uses the post slug, not the clip id. */
+    function getImaginePostHeroImageMediaId(root) {
         if (!root) return null;
-        const selectedBtn = root.querySelector('button[data-filmstrip-item="true"][tabindex="0"]');
-        if (selectedBtn) {
-            const id = imaginePostIdFromImgElement(selectedBtn.querySelector('img'));
+        const imgs = root.querySelectorAll('img[src]');
+        for (let i = 0; i < imgs.length; i++) {
+            const img = imgs[i];
+            if (img.classList.contains('invisible')) continue;
+            const id = imaginePostIdFromImgElement(img);
             if (id) return id;
-        }
-        const ringBtn = root.querySelector('button[data-filmstrip-item="true"][class*="ring-white"]');
-        if (ringBtn) {
-            const id = imaginePostIdFromImgElement(ringBtn.querySelector('img'));
-            if (id) return id;
-        }
-        const mainGrid = root.querySelector('div.group.rounded-2xl div.grid');
-        if (mainGrid) {
-            const heroImg = mainGrid.querySelector('img.col-start-1.row-start-1') || mainGrid.querySelector('img[src]');
-            const fromImg = imaginePostIdFromImgElement(heroImg);
-            if (fromImg) return fromImg;
-            const vid = mainGrid.querySelector('video');
-            const fromVid = imaginePostIdFromVideoElement(vid);
-            if (fromVid) return fromVid;
         }
         return null;
     }
 
+    /** Media id for the filmstrip / hero slide the UI shows as selected. */
+    function getImaginePostSelectedMediaId(root) {
+        const selectedBtn = getImaginePostSelectedFilmstripButton();
+        if (selectedBtn) {
+            const id = imaginePostIdFromFilmstripButton(selectedBtn);
+            if (id) return id;
+        }
+        return getImaginePostHeroImageMediaId(root);
+    }
+
     function hideImaginePostDomForDeletedMediaId(root, mediaId) {
-        if (!root || !mediaId) return;
+        if (!mediaId) return;
         const norm = String(mediaId).toLowerCase();
         const hideEl = (el) => {
             if (el && el.style) el.style.display = 'none';
         };
-        root.querySelectorAll('button[data-filmstrip-item="true"]').forEach((btn) => {
-            const id = imaginePostIdFromImgElement(btn.querySelector('img'));
-            if (id === norm) {
-                const wrap = btn.closest('.snap-center') || btn.closest('[class*="snap-center"]');
-                hideEl(wrap || btn);
-            }
-        });
+        const strip = imaginePostFilmstripScrollEl();
+        const filmstripHost = strip || root;
+        if (filmstripHost) {
+            filmstripHost.querySelectorAll('button[data-filmstrip-item="true"]').forEach((btn) => {
+                const id = imaginePostIdFromFilmstripButton(btn);
+                if (id === norm) {
+                    const wrap = btn.closest('.snap-center') || btn.closest('[class*="snap-center"]');
+                    hideEl(wrap || btn);
+                }
+            });
+        }
     }
 
     function collectImaginePostMediaIdsInDomOrder(root, debugRecords) {
+        const fromFilmstrip = collectImaginePostFilmstripMediaIds(debugRecords);
+        if (fromFilmstrip.length) return fromFilmstrip;
+
         const ordered = [];
         const seen = new Set();
         if (!root || root.nodeType !== 1) return ordered;
@@ -2046,13 +2110,122 @@
     function applyGrokImaginePostCornerButtonLayout() {
         if (!isGrokHost() || !isPostPage()) return;
         const rightPx = grokImaginePostToolbarRightPx() + 'px';
-        for (const id of [
-            IV_GROK_POST_KEEP_BTN_ID,
-            IV_GROK_DELETE_ALL_BTN_ID,
-            IV_GROK_DELETE_EXCEPT_BTN_ID,
-        ]) {
-            const el = document.getElementById(id);
-            if (el) el.style.right = rightPx;
+        const placements = [
+            [IV_GROK_DELETE_EXCEPT_BTN_ID, IV_GROK_DELETE_EXCEPT_BOTTOM_PX],
+            [IV_GROK_DELETE_ALL_BTN_ID, IV_GROK_DELETE_ALL_BOTTOM_PX],
+            [IV_GROK_POST_KEEP_BTN_ID, IV_GROK_POST_KEEP_BOTTOM_PX],
+        ];
+        for (let i = 0; i < placements.length; i++) {
+            const el = document.getElementById(placements[i][0]);
+            if (!el) continue;
+            Object.assign(el.style, {
+                position: 'fixed',
+                right: rightPx,
+                bottom: placements[i][1] + 'px',
+                left: 'auto',
+                top: 'auto',
+                transform: 'none',
+                zIndex: '2147483640',
+                pointerEvents: 'auto'
+            });
+        }
+    }
+
+    /** Outer filmstrip column (thumbs rail), not just the scroll inner. */
+    function imaginePostFilmstripMountRect() {
+        const strip = imaginePostFilmstripScrollEl();
+        if (!strip) return null;
+        let host = strip.parentElement;
+        if (host && host.parentElement) host = host.parentElement;
+        if (!host) host = strip;
+        const r = host.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) return null;
+        return r;
+    }
+
+    /** Fixed position just right of the filmstrip; tracks the selected thumb vertically. */
+    function mountGrokDeleteSelectedButton(sbtn) {
+        if (!sbtn) return;
+        if (!sbtn.parentElement) document.body.appendChild(sbtn);
+        const mountRect = imaginePostFilmstripMountRect();
+        const br0 = sbtn.getBoundingClientRect();
+        const btnH = Math.max(36, Math.ceil(br0.height) || sbtn.offsetHeight || 36);
+        if (mountRect) {
+            const selectedBtn = getImaginePostSelectedFilmstripButton();
+            let top;
+            if (selectedBtn) {
+                const sr = selectedBtn.getBoundingClientRect();
+                top = Math.round(sr.top + sr.height / 2 - btnH / 2);
+            } else {
+                top = Math.round(mountRect.top + mountRect.height / 2 - btnH / 2);
+            }
+            const left = Math.round(mountRect.right + IV_GROK_FILMSTRIP_BTN_GAP_PX);
+            Object.assign(sbtn.style, {
+                position: 'fixed',
+                left: left + 'px',
+                top: top + 'px',
+                right: 'auto',
+                bottom: 'auto',
+                transform: 'none',
+                zIndex: '2147483640',
+                pointerEvents: 'auto'
+            });
+        } else {
+            Object.assign(sbtn.style, {
+                position: 'fixed',
+                bottom: IV_GROK_DELETE_ALL_BOTTOM_PX + 52 + 'px',
+                right: grokImaginePostToolbarRightPx() + 'px',
+                left: 'auto',
+                top: 'auto',
+                transform: 'none',
+                zIndex: '2147483640',
+                pointerEvents: 'auto'
+            });
+        }
+    }
+
+    let grokImaginePostFilmstripResizeObs = null;
+    let grokImaginePostFilmstripResizeObsTarget = null;
+    let grokImaginePostFilmstripScrollElBound = null;
+
+    function grokImaginePostFilmstripObserve() {
+        const strip = imaginePostFilmstripScrollEl();
+        if (!strip) return;
+        if (strip !== grokImaginePostFilmstripScrollElBound) {
+            if (grokImaginePostFilmstripScrollElBound) {
+                grokImaginePostFilmstripScrollElBound.removeEventListener('scroll', grokImaginePostFilmstripOnScroll);
+            }
+            grokImaginePostFilmstripScrollElBound = strip;
+            strip.addEventListener('scroll', grokImaginePostFilmstripOnScroll, { passive: true });
+        }
+        if (typeof ResizeObserver === 'undefined') return;
+        let host = strip.parentElement;
+        if (host && host.parentElement) host = host.parentElement;
+        if (!host) host = strip;
+        if (!grokImaginePostFilmstripResizeObs) {
+            grokImaginePostFilmstripResizeObs = new ResizeObserver(() => {
+                scheduleImaginePostDeleteButtonsSync();
+            });
+        }
+        if (host === grokImaginePostFilmstripResizeObsTarget) return;
+        grokImaginePostFilmstripResizeObs.disconnect();
+        grokImaginePostFilmstripResizeObs.observe(host);
+        grokImaginePostFilmstripResizeObsTarget = host;
+    }
+
+    function grokImaginePostFilmstripOnScroll() {
+        scheduleImaginePostDeleteButtonsSync();
+    }
+
+    function teardownGrokImaginePostFilmstripObserve() {
+        if (grokImaginePostFilmstripScrollElBound) {
+            grokImaginePostFilmstripScrollElBound.removeEventListener('scroll', grokImaginePostFilmstripOnScroll);
+            grokImaginePostFilmstripScrollElBound = null;
+        }
+        if (grokImaginePostFilmstripResizeObs) {
+            grokImaginePostFilmstripResizeObs.disconnect();
+            grokImaginePostFilmstripResizeObs = null;
+            grokImaginePostFilmstripResizeObsTarget = null;
         }
     }
 
@@ -2083,6 +2256,7 @@
             grokImaginePostToolbarResizeObs = null;
             grokImaginePostToolbarResizeObsTarget = null;
         }
+        teardownGrokImaginePostFilmstripObserve();
         if (typeof grokImaginePostToolbarOnLayout === 'function') {
             window.removeEventListener('resize', grokImaginePostToolbarOnLayout);
             window.removeEventListener('scroll', grokImaginePostToolbarOnLayout, true);
@@ -2095,6 +2269,7 @@
     function ensureGrokImaginePostToolbarLayoutBinding() {
         if (grokImaginePostToolbarLayoutBound) {
             grokImaginePostToolbarObserveAside();
+            grokImaginePostFilmstripObserve();
             return;
         }
         grokImaginePostToolbarLayoutBound = true;
@@ -2103,103 +2278,14 @@
             grokImaginePostToolbarLayoutRaf = requestAnimationFrame(() => {
                 grokImaginePostToolbarLayoutRaf = null;
                 applyGrokImaginePostCornerButtonLayout();
-                const art = getImaginePostRoot();
                 const sb = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
-                if (art && sb) mountGrokDeleteSelectedButton(art, sb);
+                if (sb) mountGrokDeleteSelectedButton(sb);
             });
         };
         window.addEventListener('resize', grokImaginePostToolbarOnLayout);
         window.addEventListener('scroll', grokImaginePostToolbarOnLayout, true);
         grokImaginePostToolbarObserveAside();
-    }
-
-    /** Fixed position just left of filmstrip (body host avoids overflow clipping / no hit targets). */
-    function mountGrokDeleteSelectedButton(root, sbtn) {
-        if (!root || !sbtn) return;
-        if (sbtn.parentElement !== document.body || document.body.lastElementChild !== sbtn) {
-            document.body.appendChild(sbtn);
-        }
-        const strip = root.querySelector('[data-filmstrip-scroll="true"]');
-        const gap = 10;
-        const br0 = sbtn.getBoundingClientRect();
-        const btnW = Math.max(40, Math.ceil(br0.width) || sbtn.offsetWidth || 120);
-        const btnH = Math.max(36, Math.ceil(br0.height) || sbtn.offsetHeight || 36);
-        if (strip) {
-            const r = strip.getBoundingClientRect();
-            const left = Math.max(8, Math.round(r.left - btnW - gap));
-            const top = Math.round(r.top + r.height / 2 - btnH / 2);
-            Object.assign(sbtn.style, {
-                position: 'fixed',
-                left: left + 'px',
-                top: top + 'px',
-                right: 'auto',
-                bottom: 'auto',
-                transform: 'none',
-                zIndex: '2147483640',
-                pointerEvents: 'auto'
-            });
-            if (IV_GROK_DELETE_SELECTED_DEBUG) {
-                const snap = ['strip', Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), left, top].join(',');
-                if (snap !== sbtn._ivGrokMountDebugSnap) {
-                    sbtn._ivGrokMountDebugSnap = snap;
-                    const br = sbtn.getBoundingClientRect();
-                    const cx = Math.round(br.left + br.width / 2);
-                    const cy = Math.round(br.top + br.height / 2);
-                    let hit = null;
-                    try {
-                        hit = document.elementFromPoint(cx, cy);
-                    } catch (e4) {}
-                    ivLogGrokSelectedDebug('mount (strip path)', {
-                        stripRect: { left: r.left, top: r.top, width: r.width, height: r.height },
-                        buttonCss: { left: sbtn.style.left, top: sbtn.style.top },
-                        buttonRect: { left: br.left, top: br.top, width: br.width, height: br.height },
-                        center: { cx: cx, cy: cy },
-                        elementFromPoint: hit
-                            ? { tag: hit.tagName, id: hit.id, class: (hit.className && String(hit.className).slice(0, 120)) || '' }
-                            : null,
-                        hitIsOurButton: hit === sbtn,
-                        disabled: sbtn.disabled,
-                        pointerEvents: getComputedStyle(sbtn).pointerEvents
-                    });
-                }
-            }
-            if (!sbtn._ivGrokLayoutBound) {
-                sbtn._ivGrokLayoutBound = true;
-                const onLayout = () => {
-                    if (sbtn._ivGrokLayoutRaf != null) cancelAnimationFrame(sbtn._ivGrokLayoutRaf);
-                    sbtn._ivGrokLayoutRaf = requestAnimationFrame(() => {
-                        sbtn._ivGrokLayoutRaf = null;
-                        const art = getImaginePostRoot();
-                        const sb = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
-                        if (art && sb) mountGrokDeleteSelectedButton(art, sb);
-                    });
-                };
-                window.addEventListener('resize', onLayout);
-                window.addEventListener('scroll', onLayout, true);
-                sbtn._ivGrokTeardown = () => {
-                    window.removeEventListener('resize', onLayout);
-                    window.removeEventListener('scroll', onLayout, true);
-                    if (sbtn._ivGrokLayoutRaf != null) cancelAnimationFrame(sbtn._ivGrokLayoutRaf);
-                    sbtn._ivGrokLayoutRaf = null;
-                    delete sbtn._ivGrokLayoutBound;
-                };
-            }
-        } else {
-            Object.assign(sbtn.style, {
-                position: 'fixed',
-                bottom: '144px',
-                right: grokImaginePostToolbarRightPx() + 'px',
-                top: 'auto',
-                left: 'auto',
-                transform: 'none',
-                zIndex: '2147483640',
-                pointerEvents: 'auto'
-            });
-            if (IV_GROK_DELETE_SELECTED_DEBUG && sbtn._ivGrokMountDebugSnap !== 'fallback') {
-                sbtn._ivGrokMountDebugSnap = 'fallback';
-                ivLogGrokSelectedDebug('mount (fallback corner — no filmstrip node)', { path: location.pathname });
-            }
-        }
+        grokImaginePostFilmstripObserve();
     }
 
     let imagineDeleteBtnSyncScheduled = false;
@@ -2238,7 +2324,7 @@
                 keepBtn.type = 'button';
                 Object.assign(keepBtn.style, {
                     position: 'fixed',
-                    bottom: '148px',
+                    bottom: IV_GROK_POST_KEEP_BOTTOM_PX + 'px',
                     right: '16px',
                     zIndex: '2147483640',
                     fontSize: '12px',
@@ -2298,7 +2384,7 @@
             btn.textContent = IV_GROK_UI_DELETE_ALL;
             Object.assign(btn.style, {
                 position: 'fixed',
-                bottom: '96px',
+                bottom: IV_GROK_DELETE_ALL_BOTTOM_PX + 'px',
                 right: '16px',
                 zIndex: '2147483640',
                 width: 'auto',
@@ -2354,7 +2440,7 @@
                 if (IV_GROK_DELETE_MEDIA_DEBUG) {
                     let filmstripButtons = 0;
                     try {
-                        filmstripButtons = root.querySelectorAll('button[data-filmstrip-item="true"]').length;
+                        filmstripButtons = (imaginePostFilmstripScrollEl() || root).querySelectorAll('button[data-filmstrip-item="true"]').length;
                     } catch (e3) {}
                     console.log('[Image Viewer] Grok delete-all media scan', {
                         path: location.pathname,
@@ -2419,7 +2505,7 @@
             exBtn.textContent = IV_GROK_UI_DELETE_OTHERS;
             Object.assign(exBtn.style, {
                 position: 'fixed',
-                bottom: '44px',
+                bottom: IV_GROK_DELETE_EXCEPT_BOTTOM_PX + 'px',
                 right: '16px',
                 zIndex: '2147483640',
                 width: 'auto',
@@ -2645,9 +2731,10 @@
                 grokDeleteSelectedArm();
             });
         }
+        if (!sbtn.parentElement) document.body.appendChild(sbtn);
         applyGrokImaginePostCornerButtonLayout();
+        mountGrokDeleteSelectedButton(sbtn);
         ensureGrokImaginePostToolbarLayoutBinding();
-        mountGrokDeleteSelectedButton(article, sbtn);
     }
 
     // Apply shared volume to a single video
