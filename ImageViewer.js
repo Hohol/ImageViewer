@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.21
+// @version      2.22
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1737,6 +1737,8 @@
     const IV_GROK_POST_KEEP_BTN_ID = 'iv-grok-imagine-post-keep';
     const IV_GROK_UI_DELETE_ALL = 'Delete all';
     const IV_GROK_UI_DELETE_CHOSEN = 'Delete chosen';
+    const IV_GROK_UI_DELETE_CHOSEN_ICON =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>';
     /** Shorter than “delete all except chosen”: keeps first (page order) + current strip selection. */
     const IV_GROK_UI_DELETE_OTHERS = 'Delete others';
     const IV_GROK_UI_CONFIRM = 'Confirm';
@@ -1753,6 +1755,11 @@
     /** true: logs layout when it changes, pointer hits in the × control area, and each click / delete step. Grok’s own console errors (CSP, GTM, i18next, etc.) are unrelated. */
     const IV_GROK_DELETE_SELECTED_DEBUG = false;
     const GROK_ASSET_UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+    function grokDeleteSelectedButtonShowIdleIcon(btn) {
+        btn.innerHTML = IV_GROK_UI_DELETE_CHOSEN_ICON;
+        btn.setAttribute('aria-label', IV_GROK_UI_DELETE_CHOSEN);
+    }
 
     /** UUID in /imagine/post/<uuid> — same id as grid thumbnails for that asset. */
     function imaginePostSlugMediaIdFromPath() {
@@ -2683,12 +2690,13 @@
                 IV_GROK_UI_DELETE_CHOSEN +
                 ': remove only the strip / preview item that is selected now. Tap twice (second tap shows Confirm). Cannot be undone.';
             sbtn.title = selIdleTitle;
-            sbtn.textContent = IV_GROK_UI_DELETE_CHOSEN;
+            grokDeleteSelectedButtonShowIdleIcon(sbtn);
             Object.assign(sbtn.style, {
                 width: 'auto',
-                maxWidth: 'min(220px, calc(100vw - 32px))',
+                maxWidth: 'none',
+                minWidth: '36px',
                 minHeight: '36px',
-                padding: '8px 14px',
+                padding: '8px',
                 borderRadius: '9999px',
                 border: '1px solid rgba(251,191,36,0.7)',
                 background: 'rgba(24,24,27,0.92)',
@@ -2708,7 +2716,7 @@
                 sbtn._ivGrokSelArmTid = null;
                 delete sbtn.dataset.ivGrokSelArmed;
                 delete sbtn.dataset.ivGrokPendingDeleteId;
-                sbtn.textContent = IV_GROK_UI_DELETE_CHOSEN;
+                grokDeleteSelectedButtonShowIdleIcon(sbtn);
                 sbtn.title = selIdleTitle;
                 sbtn.style.background = 'rgba(24,24,27,0.92)';
                 sbtn.style.borderColor = 'rgba(251,191,36,0.7)';
