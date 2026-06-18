@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.20
+// @version      2.21
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1742,10 +1742,11 @@
     const IV_GROK_UI_CONFIRM = 'Confirm';
     /** First tap arms the delete button; second tap runs delete. Auto-cancels after this many ms. */
     const IV_GROK_DELETE_ARM_MS = 10000;
-    /** Bottom-right stack (px from viewport bottom); 52px steps fit ~36px pill buttons. */
+    /** Bottom-right stack fallbacks when the Imagine prompt bar is not in the DOM yet. */
     const IV_GROK_DELETE_EXCEPT_BOTTOM_PX = 44;
     const IV_GROK_DELETE_ALL_BOTTOM_PX = 96;
     const IV_GROK_POST_KEEP_BOTTOM_PX = 148;
+    const IV_GROK_CORNER_BTN_STEP_PX = 52;
     const IV_GROK_FILMSTRIP_BTN_GAP_PX = 10;
     /** true: DevTools Console logs a full scan when you click the trash (cancel confirm is OK). Set false after debugging. */
     const IV_GROK_DELETE_MEDIA_DEBUG = false;
@@ -2107,13 +2108,39 @@
         return Math.max(16, Math.round(window.innerWidth - r.left + IV_GROK_POST_TOOLBAR_GAP_PX));
     }
 
+    /** Bottom Imagine prompt/query bar — stack delete controls just above it. */
+    function grokImaginePostPromptBarEl() {
+        const input = document.querySelector('[data-testid="chat-input"]');
+        if (!input) return null;
+        return input.closest('.query-bar') || input.closest('form') || input;
+    }
+
+    function grokImaginePostPromptBarRect() {
+        const el = grokImaginePostPromptBarEl();
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        if (r.width < 40 || r.height < 8) return null;
+        return r;
+    }
+
+    function grokImaginePostCornerStackBottomPx(stackIndex) {
+        const fallbacks = [IV_GROK_DELETE_EXCEPT_BOTTOM_PX, IV_GROK_DELETE_ALL_BOTTOM_PX, IV_GROK_POST_KEEP_BOTTOM_PX];
+        const r = grokImaginePostPromptBarRect();
+        if (!r) return fallbacks[stackIndex] != null ? fallbacks[stackIndex] : fallbacks[0];
+        const baseBottom = Math.max(
+            IV_GROK_DELETE_EXCEPT_BOTTOM_PX,
+            Math.round(window.innerHeight - r.top + IV_GROK_POST_TOOLBAR_GAP_PX)
+        );
+        return baseBottom + stackIndex * IV_GROK_CORNER_BTN_STEP_PX;
+    }
+
     function applyGrokImaginePostCornerButtonLayout() {
         if (!isGrokHost() || !isPostPage()) return;
         const rightPx = grokImaginePostToolbarRightPx() + 'px';
         const placements = [
-            [IV_GROK_DELETE_EXCEPT_BTN_ID, IV_GROK_DELETE_EXCEPT_BOTTOM_PX],
-            [IV_GROK_DELETE_ALL_BTN_ID, IV_GROK_DELETE_ALL_BOTTOM_PX],
-            [IV_GROK_POST_KEEP_BTN_ID, IV_GROK_POST_KEEP_BOTTOM_PX],
+            [IV_GROK_DELETE_EXCEPT_BTN_ID, 0],
+            [IV_GROK_DELETE_ALL_BTN_ID, 1],
+            [IV_GROK_POST_KEEP_BTN_ID, 2],
         ];
         for (let i = 0; i < placements.length; i++) {
             const el = document.getElementById(placements[i][0]);
@@ -2121,7 +2148,7 @@
             Object.assign(el.style, {
                 position: 'fixed',
                 right: rightPx,
-                bottom: placements[i][1] + 'px',
+                bottom: grokImaginePostCornerStackBottomPx(placements[i][1]) + 'px',
                 left: 'auto',
                 top: 'auto',
                 transform: 'none',
@@ -2173,7 +2200,7 @@
         } else {
             Object.assign(sbtn.style, {
                 position: 'fixed',
-                bottom: IV_GROK_DELETE_ALL_BOTTOM_PX + 52 + 'px',
+                bottom: grokImaginePostCornerStackBottomPx(2) + 'px',
                 right: grokImaginePostToolbarRightPx() + 'px',
                 left: 'auto',
                 top: 'auto',
@@ -2187,6 +2214,8 @@
     let grokImaginePostFilmstripResizeObs = null;
     let grokImaginePostFilmstripResizeObsTarget = null;
     let grokImaginePostFilmstripScrollElBound = null;
+    let grokImaginePostPromptResizeObs = null;
+    let grokImaginePostPromptResizeObsTarget = null;
 
     function grokImaginePostFilmstripObserve() {
         const strip = imaginePostFilmstripScrollEl();
@@ -2215,6 +2244,28 @@
 
     function grokImaginePostFilmstripOnScroll() {
         scheduleImaginePostDeleteButtonsSync();
+    }
+
+    function grokImaginePostPromptBarObserve() {
+        const el = grokImaginePostPromptBarEl();
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        if (!grokImaginePostPromptResizeObs) {
+            grokImaginePostPromptResizeObs = new ResizeObserver(() => {
+                scheduleImaginePostDeleteButtonsSync();
+            });
+        }
+        if (el === grokImaginePostPromptResizeObsTarget) return;
+        grokImaginePostPromptResizeObs.disconnect();
+        grokImaginePostPromptResizeObs.observe(el);
+        grokImaginePostPromptResizeObsTarget = el;
+    }
+
+    function teardownGrokImaginePostPromptBarObserve() {
+        if (grokImaginePostPromptResizeObs) {
+            grokImaginePostPromptResizeObs.disconnect();
+            grokImaginePostPromptResizeObs = null;
+            grokImaginePostPromptResizeObsTarget = null;
+        }
     }
 
     function teardownGrokImaginePostFilmstripObserve() {
@@ -2257,6 +2308,7 @@
             grokImaginePostToolbarResizeObsTarget = null;
         }
         teardownGrokImaginePostFilmstripObserve();
+        teardownGrokImaginePostPromptBarObserve();
         if (typeof grokImaginePostToolbarOnLayout === 'function') {
             window.removeEventListener('resize', grokImaginePostToolbarOnLayout);
             window.removeEventListener('scroll', grokImaginePostToolbarOnLayout, true);
@@ -2270,6 +2322,7 @@
         if (grokImaginePostToolbarLayoutBound) {
             grokImaginePostToolbarObserveAside();
             grokImaginePostFilmstripObserve();
+            grokImaginePostPromptBarObserve();
             return;
         }
         grokImaginePostToolbarLayoutBound = true;
@@ -2286,6 +2339,7 @@
         window.addEventListener('scroll', grokImaginePostToolbarOnLayout, true);
         grokImaginePostToolbarObserveAside();
         grokImaginePostFilmstripObserve();
+        grokImaginePostPromptBarObserve();
     }
 
     let imagineDeleteBtnSyncScheduled = false;
