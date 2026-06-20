@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.22
+// @version      2.23
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -385,13 +385,18 @@
     // Grok: only main chat generated images (opt-in), not thumbnails / chrome / etc.
     function isGrokOptInImage(img) {
         if (img.closest('[class*="group/grok-image"]')) return true;
-        // Imagine / large inline card: img.col-start-1.row-start-1 inside div.grid under rounded-2xl group card
         const grid = img.closest('div.grid');
-        if (grid && img.classList.contains('col-start-1') && img.classList.contains('row-start-1')) {
-            const card = grid.parentElement;
-            if (card && card.classList.contains('group') && card.classList.contains('rounded-2xl')) {
-                return true;
-            }
+        if (!grid || !img.classList.contains('col-start-1') || !img.classList.contains('row-start-1')) {
+            return false;
+        }
+        // Legacy Imagine card: div.group.rounded-2xl wrapper
+        const card = grid.parentElement;
+        if (card && card.classList.contains('group') && card.classList.contains('rounded-2xl')) {
+            return true;
+        }
+        // Imagine post hero (2025+ layout): main > article > … > div.grid > img
+        if (img.closest('article') && img.closest('main') && !img.closest('[data-filmstrip-item]')) {
+            return true;
         }
         return false;
     }
