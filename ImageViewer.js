@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.23
+// @version      2.24
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2228,6 +2228,77 @@
     let grokImaginePostFilmstripScrollElBound = null;
     let grokImaginePostPromptResizeObs = null;
     let grokImaginePostPromptResizeObsTarget = null;
+    let grokImaginePostMoreOptionsMenuObs = null;
+    let grokImaginePostMoreOptionsMenuObsTarget = null;
+
+    function grokImaginePostMoreOptionsMenuOpen() {
+        const triggers = document.querySelectorAll('button[aria-label="More options"][aria-haspopup="menu"]');
+        for (let i = 0; i < triggers.length; i++) {
+            const t = triggers[i];
+            if (t.getAttribute('data-state') === 'open' || t.getAttribute('aria-expanded') === 'true') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function grokImaginePostCornerDeleteButtonIds() {
+        return [
+            IV_GROK_DELETE_EXCEPT_BTN_ID,
+            IV_GROK_DELETE_ALL_BTN_ID,
+            IV_GROK_POST_KEEP_BTN_ID,
+        ];
+    }
+
+    function applyGrokImaginePostDeleteButtonsVisibility() {
+        if (!isGrokHost() || !isPostPage()) return;
+        const cornerIds = grokImaginePostCornerDeleteButtonIds();
+        if (grokImaginePostMoreOptionsMenuOpen()) {
+            for (let i = 0; i < cornerIds.length; i++) {
+                const el = document.getElementById(cornerIds[i]);
+                if (el) el.style.display = 'none';
+            }
+        } else {
+            for (let i = 0; i < cornerIds.length; i++) {
+                const el = document.getElementById(cornerIds[i]);
+                if (el) el.style.display = '';
+            }
+            applyGrokImaginePostCornerButtonLayout();
+        }
+        const sb = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+        if (sb) mountGrokDeleteSelectedButton(sb);
+    }
+
+    function grokImaginePostMoreOptionsMenuObserve() {
+        const aside = grokImaginePostDetailsAside();
+        if (!aside || typeof MutationObserver === 'undefined') return;
+        if (!grokImaginePostMoreOptionsMenuObs) {
+            grokImaginePostMoreOptionsMenuObs = new MutationObserver(() => {
+                applyGrokImaginePostDeleteButtonsVisibility();
+            });
+        }
+        if (aside === grokImaginePostMoreOptionsMenuObsTarget) {
+            applyGrokImaginePostDeleteButtonsVisibility();
+            return;
+        }
+        grokImaginePostMoreOptionsMenuObs.disconnect();
+        grokImaginePostMoreOptionsMenuObs.observe(aside, {
+            attributes: true,
+            attributeFilter: ['data-state', 'aria-expanded'],
+            subtree: true,
+            childList: true,
+        });
+        grokImaginePostMoreOptionsMenuObsTarget = aside;
+        applyGrokImaginePostDeleteButtonsVisibility();
+    }
+
+    function teardownGrokImaginePostMoreOptionsMenuObserve() {
+        if (grokImaginePostMoreOptionsMenuObs) {
+            grokImaginePostMoreOptionsMenuObs.disconnect();
+            grokImaginePostMoreOptionsMenuObs = null;
+            grokImaginePostMoreOptionsMenuObsTarget = null;
+        }
+    }
 
     function grokImaginePostFilmstripObserve() {
         const strip = imaginePostFilmstripScrollEl();
@@ -2321,6 +2392,7 @@
         }
         teardownGrokImaginePostFilmstripObserve();
         teardownGrokImaginePostPromptBarObserve();
+        teardownGrokImaginePostMoreOptionsMenuObserve();
         if (typeof grokImaginePostToolbarOnLayout === 'function') {
             window.removeEventListener('resize', grokImaginePostToolbarOnLayout);
             window.removeEventListener('scroll', grokImaginePostToolbarOnLayout, true);
@@ -2335,6 +2407,7 @@
             grokImaginePostToolbarObserveAside();
             grokImaginePostFilmstripObserve();
             grokImaginePostPromptBarObserve();
+            grokImaginePostMoreOptionsMenuObserve();
             return;
         }
         grokImaginePostToolbarLayoutBound = true;
@@ -2342,9 +2415,7 @@
             if (grokImaginePostToolbarLayoutRaf != null) cancelAnimationFrame(grokImaginePostToolbarLayoutRaf);
             grokImaginePostToolbarLayoutRaf = requestAnimationFrame(() => {
                 grokImaginePostToolbarLayoutRaf = null;
-                applyGrokImaginePostCornerButtonLayout();
-                const sb = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
-                if (sb) mountGrokDeleteSelectedButton(sb);
+                applyGrokImaginePostDeleteButtonsVisibility();
             });
         };
         window.addEventListener('resize', grokImaginePostToolbarOnLayout);
@@ -2352,6 +2423,7 @@
         grokImaginePostToolbarObserveAside();
         grokImaginePostFilmstripObserve();
         grokImaginePostPromptBarObserve();
+        grokImaginePostMoreOptionsMenuObserve();
     }
 
     let imagineDeleteBtnSyncScheduled = false;
@@ -2799,8 +2871,7 @@
             });
         }
         if (!sbtn.parentElement) document.body.appendChild(sbtn);
-        applyGrokImaginePostCornerButtonLayout();
-        mountGrokDeleteSelectedButton(sbtn);
+        applyGrokImaginePostDeleteButtonsVisibility();
         ensureGrokImaginePostToolbarLayoutBinding();
     }
 
