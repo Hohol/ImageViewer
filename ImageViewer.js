@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.25
+// @version      2.26
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -173,6 +173,92 @@
 
     function overlayCursorWhenVisible() {
         return overlayFitNative ? 'default' : 'zoom-out';
+    }
+
+    /** true: DevTools console logs fullscreen exit / resync steps. Set false normally. */
+    const IV_FULLSCREEN_EXIT_DEBUG = false;
+
+    function ivLogFullscreenExit(message, detail) {
+        if (!IV_FULLSCREEN_EXIT_DEBUG) return;
+        if (detail !== undefined) console.log('[Image Viewer fullscreen exit]', message, detail);
+        else console.log('[Image Viewer fullscreen exit]', message);
+    }
+
+    function isFullscreenApiActive(doc) {
+        doc = doc || document;
+        return !!(
+            doc.fullscreenElement ||
+            doc.webkitFullscreenElement ||
+            doc.mozFullScreenElement ||
+            doc.msFullscreenElement
+        );
+    }
+
+    /** Heuristic: browser window still chromeless even though the Fullscreen API already exited. */
+    function isBrowserWindowVisuallyFullscreen() {
+        try {
+            if (window.matchMedia) {
+                if (window.matchMedia('(display-mode: fullscreen)').matches) return true;
+            }
+        } catch (e) {}
+        if (document.webkitIsFullScreen === true) return true;
+        const margin = 80;
+        const ih = window.innerHeight;
+        const iw = window.innerWidth;
+        const oh = window.outerHeight;
+        const ow = window.outerWidth;
+        const sh = window.screen.availHeight || window.screen.height;
+        const sw = window.screen.availWidth || window.screen.width;
+        if (ih >= sh - margin && iw >= sw - margin) return true;
+        if (oh >= sh - margin && ow >= sw - margin) return true;
+        if (ih >= window.screen.height - 50) return true;
+        return false;
+    }
+
+    function resyncStuckBrowserFullscreen(elementForReentry) {
+        const doc = document;
+        const el = elementForReentry || document.documentElement;
+        const requestFn =
+            el.requestFullscreen ||
+            el.webkitRequestFullscreen ||
+            el.mozRequestFullScreen ||
+            el.msRequestFullscreen;
+        const exitFn =
+            doc.exitFullscreen ||
+            doc.webkitExitFullscreen ||
+            doc.mozCancelFullScreen ||
+            doc.msExitFullscreen;
+        if (!requestFn || !exitFn) return Promise.resolve();
+        return Promise.resolve()
+            .then(() => requestFn.call(el))
+            .then(() => exitFn.call(doc))
+            .catch((err) => {
+                ivLogFullscreenExit('resync failed', { message: err && err.message });
+            });
+    }
+
+    function scheduleFullscreenExitResync(elementForReentry, options) {
+        options = options || {};
+        const el = elementForReentry || document.documentElement;
+        const force = !!options.force;
+
+        const maybeResync = (label) => {
+            if (isFullscreenApiActive()) {
+                ivLogFullscreenExit('skip resync: API still fullscreen', { label });
+                return;
+            }
+            const visual = isBrowserWindowVisuallyFullscreen();
+            if (!force && !visual) {
+                ivLogFullscreenExit('skip resync: not visually fullscreen', { label, force, visual });
+                return;
+            }
+            ivLogFullscreenExit('resync enter→exit', { label, force, visual });
+            void resyncStuckBrowserFullscreen(el);
+        };
+
+        maybeResync('0ms');
+        setTimeout(() => maybeResync('100ms'), 100);
+        setTimeout(() => maybeResync('300ms'), 300);
     }
 
     /** true: DevTools console logs each step of copy-to-clipboard (C in image fullscreen). Set false normally. */
@@ -472,47 +558,48 @@
     // exit, which properly exits both API and window fullscreen.
     function exitFullscreenWithWorkaround(elementForReentry) {
         const doc = document;
-        const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen || 
-                      doc.mozCancelFullScreen || doc.msExitFullscreen;
-        
+        const exitFn =
+            doc.exitFullscreen ||
+            doc.webkitExitFullscreen ||
+            doc.mozCancelFullScreen ||
+            doc.msExitFullscreen;
+
         if (!exitFn) return Promise.resolve();
-        
+
+        const el = elementForReentry || document.documentElement;
         const result = exitFn.call(doc);
-        
-        // Check after delay if we're visually stuck in fullscreen
+
+        scheduleFullscreenExitResync(el);
+
         setTimeout(() => {
-            const stillFs = doc.fullscreenElement || doc.webkitFullscreenElement;
-            const isVisuallyFs = window.innerHeight >= screen.height - 50;
-            
-            if (stillFs && exitFn) {
+            if (isFullscreenApiActive(doc)) {
+                ivLogFullscreenExit('retry exitFullscreen');
                 exitFn.call(doc);
             }
-            // If visually fullscreen but API says no, re-enter and exit to re-sync
-            if (isVisuallyFs && !stillFs) {
-                const el = elementForReentry || document.documentElement;
-                const requestFn = el.requestFullscreen || el.webkitRequestFullscreen || 
-                                 el.mozRequestFullScreen || el.msRequestFullscreen;
-                if (requestFn) {
-                    requestFn.call(el).then(() => exitFn.call(doc)).catch(() => {});
-                }
-            }
         }, 100);
-        
+
         return result;
     }
 
     function hideFullscreen() {
         const doc = document;
-        const isFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement || 
-                            doc.mozFullScreenElement || doc.msFullscreenElement;
-        
-        const result = exitFullscreenWithWorkaround();
+        const apiFs = isFullscreenApiActive(doc);
+        const hadOverlay = !!overlay;
+        const docEl = document.documentElement;
+
+        if (!apiFs && hadOverlay) {
+            clearOverlay();
+            scheduleFullscreenExitResync(docEl, { force: true });
+            return;
+        }
+
+        const result = exitFullscreenWithWorkaround(docEl);
         if (result && result.then) {
             result.catch(() => clearOverlay());
         }
-        
-        if (!isFullscreen) {
-        clearOverlay();
+
+        if (!apiFs) {
+            clearOverlay();
         }
     }
 
@@ -972,26 +1059,9 @@
     // Clear overlay on fullscreen exit (with browser bug workaround)
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
     .forEach(evt => document.addEventListener(evt, () => {
-        if (overlay && !document.fullscreenElement && !document.webkitFullscreenElement &&
-            !document.mozFullScreenElement && !document.msFullscreenElement) {
+        if (overlay && !isFullscreenApiActive()) {
             clearOverlay();
-            
-            // Apply browser bug workaround for images (same as videos)
-            setTimeout(() => {
-                const stillFs = document.fullscreenElement || document.webkitFullscreenElement;
-                const isVisuallyFs = window.innerHeight >= screen.height - 50;
-                
-                if (isVisuallyFs && !stillFs) {
-                    const docEl = document.documentElement;
-                    const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || 
-                                     docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
-                    const exitFn = document.exitFullscreen || document.webkitExitFullscreen || 
-                                  document.mozCancelFullScreen || document.msExitFullscreen;
-                    if (requestFn && exitFn) {
-                        requestFn.call(docEl).then(() => exitFn.call(document)).catch(() => {});
-                    }
-                }
-            }, 100);
+            scheduleFullscreenExitResync(document.documentElement, { force: true });
         }
     }));
 
@@ -3138,20 +3208,7 @@
             // Apply browser bug workaround for videos (same bug as with images)
             if (lastFullscreenVideo) {
                 const videoForWorkaround = lastFullscreenVideo;
-                setTimeout(() => {
-                    const stillFs = document.fullscreenElement || document.webkitFullscreenElement;
-                    const isVisuallyFs = window.innerHeight >= screen.height - 50;
-                    
-                    if (isVisuallyFs && !stillFs) {
-                        const requestFn = videoForWorkaround.requestFullscreen || videoForWorkaround.webkitRequestFullscreen || 
-                                         videoForWorkaround.mozRequestFullScreen || videoForWorkaround.msRequestFullscreen;
-                        const exitFn = document.exitFullscreen || document.webkitExitFullscreen || 
-                                      document.mozCancelFullScreen || document.msExitFullscreen;
-                        if (requestFn && exitFn) {
-                            requestFn.call(videoForWorkaround).then(() => exitFn.call(document)).catch(() => {});
-                        }
-                    }
-                }, 100);
+                scheduleFullscreenExitResync(videoForWorkaround);
                 lastFullscreenVideo = null;
             }
         }
