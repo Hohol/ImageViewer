@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.24
+// @version      2.25
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2075,6 +2075,14 @@
         return allIds.slice(1).concat(allIds[0]);
     }
 
+    /** Skip ids we already deleted this session (e.g. via trash icon before bulk delete). */
+    function grokBulkMediaIdsExcludingRecentlyDeleted(idList) {
+        if (!idList || !idList.length) return [];
+        const recentDeleted = grokRecentlyDeletedLoadSet();
+        if (!recentDeleted.size) return idList.slice();
+        return idList.filter((id) => !recentDeleted.has(String(id || '').trim().toLowerCase()));
+    }
+
     function deleteGrokMediaPostOne(id) {
         return fetch('https://grok.com/rest/media/post/delete', {
             method: 'POST',
@@ -2595,12 +2603,21 @@
                     grokDeleteAllDisarm();
                     return;
                 }
+                const idsForDelete = grokBulkMediaIdsExcludingRecentlyDeleted(imaginePostMediaIdsForDelete(allIds));
                 if (btn.dataset.ivGrokArmed !== '1') {
-                    grokDeleteAllArm(allIds.length);
+                    if (!idsForDelete.length) {
+                        history.back();
+                        return;
+                    }
+                    grokDeleteAllArm(idsForDelete.length);
                     return;
                 }
                 grokDeleteAllDisarm();
-                const ids = imaginePostMediaIdsForDelete(allIds);
+                if (!idsForDelete.length) {
+                    history.back();
+                    return;
+                }
+                const ids = idsForDelete;
                 btn.disabled = true;
                 const failures = [];
                 const deletedOk = [];
@@ -2696,10 +2713,10 @@
                 const root = getImaginePostRoot();
                 if (!root) return;
                 if (exBtn.dataset.ivGrokArmed === '1') {
-                    const pending = exBtn._ivGrokExceptPendingIds ? exBtn._ivGrokExceptPendingIds.slice() : null;
+                    const pendingRaw = exBtn._ivGrokExceptPendingIds ? exBtn._ivGrokExceptPendingIds.slice() : null;
                     grokDeleteExceptDisarm();
+                    const pending = pendingRaw ? grokBulkMediaIdsExcludingRecentlyDeleted(pendingRaw) : null;
                     if (!pending || !pending.length) {
-                        alert('Image Viewer: Armed trim lost its list; try again.');
                         return;
                     }
                     exBtn.disabled = true;
@@ -2752,7 +2769,12 @@
                     grokDeleteExceptDisarm();
                     return;
                 }
-                exBtn._ivGrokExceptPendingIds = imaginePostMediaIdsForDelete(toDeleteOrdered);
+                const pendingIds = grokBulkMediaIdsExcludingRecentlyDeleted(imaginePostMediaIdsForDelete(toDeleteOrdered));
+                if (!pendingIds.length) {
+                    grokDeleteExceptDisarm();
+                    return;
+                }
+                exBtn._ivGrokExceptPendingIds = pendingIds;
                 grokDeleteExceptArm(exBtn._ivGrokExceptPendingIds.length);
             });
         }
