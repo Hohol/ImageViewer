@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.26
+// @version      2.27
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -243,6 +243,10 @@
         const force = !!options.force;
 
         const maybeResync = (label) => {
+            if (document.hidden) {
+                ivLogFullscreenExit('skip resync: document hidden', { label });
+                return;
+            }
             if (isFullscreenApiActive()) {
                 ivLogFullscreenExit('skip resync: API still fullscreen', { label });
                 return;
@@ -307,6 +311,37 @@
     function viewerImageFromPointer() {
         if (ivLastPointerX < 0 || ivLastPointerY < 0) return null;
         return viewerImageFromEventTarget(document.elementFromPoint(ivLastPointerX, ivLastPointerY));
+    }
+
+    function viewerVideoFromPointer() {
+        if (ivLastPointerX < 0 || ivLastPointerY < 0) return null;
+        let el = document.elementFromPoint(ivLastPointerX, ivLastPointerY);
+        if (!el) return null;
+        let video = el.tagName === 'VIDEO' ? el : el.closest ? el.closest('video') : null;
+        if (video && shouldSkipVideoFullscreenTarget(video)) return null;
+        return video;
+    }
+
+    /** Largest visible <video> (Grok post pages often list filmstrip thumbs before the hero video). */
+    function pickBestVisibleVideo() {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const minArea = 64;
+        let best = null;
+        let bestArea = -1;
+        document.querySelectorAll('video').forEach((video) => {
+            if (shouldSkipVideoFullscreenTarget(video)) return;
+            const r = video.getBoundingClientRect();
+            const iw = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+            const ih = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+            const area = iw * ih;
+            if (area < minArea) return;
+            if (area > bestArea) {
+                bestArea = area;
+                best = video;
+            }
+        });
+        return best;
     }
 
     const imageInlineTabBlobCache = new Map();
@@ -2980,30 +3015,79 @@
     
     // Toggle fullscreen for video element
     function toggleVideoFullscreen(video) {
-        const doc = document;
-        const isFullscreen = doc.fullscreenElement || doc.webkitFullscreenElement || 
-                           doc.mozFullScreenElement || doc.msFullscreenElement;
-        
-        if (isFullscreen) {
-            // Exit fullscreen (pass video element for re-entry workaround)
-            exitFullscreenWithWorkaround(video);
-        } else {
-            // Enter fullscreen
-            const requestFn = video.requestFullscreen || video.webkitRequestFullscreen || 
-                            video.mozRequestFullScreen || video.msRequestFullscreen;
-            if (requestFn) requestFn.call(video);
+        video = video || pickBestVisibleVideo() || document.querySelector('video');
+        if (!video) {
+            ivLogVideoFullscreen('toggle aborted: no video element');
+            return;
         }
+
+        const doc = document;
+        const fsEl =
+            doc.fullscreenElement ||
+            doc.webkitFullscreenElement ||
+            doc.mozFullScreenElement ||
+            doc.msFullscreenElement;
+
+        if (fsEl) {
+            ivLogVideoFullscreen('exit fullscreen', { fsTag: fsEl.tagName, videoTag: video.tagName });
+            exitFullscreenWithWorkaround(fsEl.tagName === 'VIDEO' ? fsEl : doc.documentElement);
+            return;
+        }
+
+        const requestFn =
+            video.requestFullscreen ||
+            video.webkitRequestFullscreen ||
+            video.mozRequestFullScreen ||
+            video.msRequestFullscreen;
+        if (!requestFn) {
+            ivLogVideoFullscreen('requestFullscreen unavailable on video');
+            return;
+        }
+        ivLogVideoFullscreen('enter fullscreen', {
+            src: (video.currentSrc || video.src || '').slice(0, 120),
+            area: Math.round(video.getBoundingClientRect().width * video.getBoundingClientRect().height),
+        });
+        Promise.resolve(requestFn.call(video)).catch((err) => {
+            ivLogVideoFullscreen('requestFullscreen failed', { message: err && err.message });
+        });
     }
-    
-    // Create fullscreen button for a video
+
+    const IV_VIDEO_FS_BTN_ATTR = 'data-iv-video-fs-btn';
+
+    function shouldSkipVideoFullscreenTarget(video) {
+        if (!video) return true;
+        if (video.closest('[data-filmstrip-item]') || video.closest('[data-filmstrip-scroll]')) return true;
+        return false;
+    }
+
+    function videoFullscreenButtonFor(video) {
+        const container = video.parentElement;
+        if (!container) return null;
+        return container.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
+    }
+
+    function removeVideoFullscreenButton(video) {
+        if (!video) return;
+        const btn = videoFullscreenButtonFor(video);
+        if (btn) btn.remove();
+        delete video.dataset.hasFullscreenButton;
+    }
+
     function createFullscreenButton(video) {
-        // Check if button already exists
-        if (video.dataset.hasFullscreenButton) return;
+        if (shouldSkipVideoFullscreenTarget(video)) {
+            removeVideoFullscreenButton(video);
+            return;
+        }
+        if (videoFullscreenButtonFor(video)) return;
+        if (video.dataset.hasFullscreenButton) delete video.dataset.hasFullscreenButton;
+
         video.dataset.hasFullscreenButton = 'true';
-        
+
         const button = document.createElement('button');
-        button.innerHTML = '⛶'; // Fullscreen icon
-        button.title = 'Fullscreen (Alt+F)';
+        button.type = 'button';
+        button.setAttribute(IV_VIDEO_FS_BTN_ATTR, '1');
+        button.innerHTML = '⛶';
+        button.title = 'Fullscreen (F)';
         Object.assign(button.style, {
             position: 'absolute',
             bottom: '10px',
@@ -3023,45 +3107,47 @@
             alignItems: 'center',
             justifyContent: 'center'
         });
-        
-        // Show button on video hover
+
         const videoContainer = video.parentElement;
         if (!videoContainer.style.position || videoContainer.style.position === 'static') {
             videoContainer.style.position = 'relative';
         }
-        
+
         const showButton = () => button.style.opacity = '1';
         const hideButton = () => button.style.opacity = '0';
-        
+
         videoContainer.addEventListener('mouseenter', showButton);
         videoContainer.addEventListener('mouseleave', hideButton);
-        
-        // Button hover effect
+
         button.addEventListener('mouseenter', () => {
             button.style.backgroundColor = 'rgba(0,0,0,0.8)';
         });
         button.addEventListener('mouseleave', () => {
             button.style.backgroundColor = 'rgba(0,0,0,0.6)';
         });
-        
-        // Click handler
+
         button.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            // Use the same logic as Alt+F - find first video
-            const firstVideo = document.querySelector('video');
-            if (firstVideo) {
-                toggleVideoFullscreen(firstVideo);
-            }
+            toggleVideoFullscreen(video);
         });
-        
+
         videoContainer.appendChild(button);
     }
-    
-    // Add fullscreen buttons to all videos on the page
+
+    /** true: DevTools console logs video fullscreen toggle / button mount steps. Set false normally. */
+    const IV_VIDEO_FULLSCREEN_DEBUG = false;
+
+    function ivLogVideoFullscreen(message, detail) {
+        if (!IV_VIDEO_FULLSCREEN_DEBUG) return;
+        if (detail !== undefined) console.log('[Image Viewer video fullscreen]', message, detail);
+        else console.log('[Image Viewer video fullscreen]', message);
+    }
+
     function addFullscreenButtonsToVideos() {
         const videos = document.querySelectorAll('video');
-        videos.forEach(video => createFullscreenButton(video));
+        ivLogVideoFullscreen('ensure buttons', { videoCount: videos.length });
+        videos.forEach((video) => createFullscreenButton(video));
     }
     
     // Clear loop when the looped video's source changes (SPA navigation reuses same element)
@@ -3112,6 +3198,15 @@
     window.addEventListener('popstate', () => {
         scheduleImaginePostDeleteButtonsSync();
         scheduleGrokImagineSavedKeepSync();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        addFullscreenButtonsToVideos();
+        ivLogVideoFullscreen('tab visible: refreshed video buttons', {
+            videoCount: document.querySelectorAll('video').length,
+            apiFs: isFullscreenApiActive(),
+        });
     });
     
     // Track which video is in fullscreen for workaround
@@ -3267,20 +3362,28 @@
 
     // Find the target video for keyboard controls
     // In fullscreen: use the fullscreen video element
-    // Otherwise: use the first video on the page, but only if not typing in a text field
+    // Otherwise: pointer / largest visible video (Grok filmstrip + chat focus), then first match
     function getTargetVideo(e) {
-        const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement ||
-                                 document.mozFullScreenElement || document.msFullscreenElement;
-        
+        const fullscreenElement =
+            document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement;
+
         if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
             return fullscreenElement;
         }
-        
-        const isTyping = isKeyboardTypingTarget(e.target);
-        if (!isTyping) {
+
+        const fromPointer = viewerVideoFromPointer();
+        if (fromPointer) return fromPointer;
+
+        const bestVisible = pickBestVisibleVideo();
+        if (bestVisible) return bestVisible;
+
+        if (!isKeyboardTypingTarget(e.target)) {
             return document.querySelector('video');
         }
-        
+
         return null;
     }
 
@@ -3615,11 +3718,16 @@
                 return;
             }
             if (document.querySelectorAll('video').length > 0) {
-                const video = getTargetVideo(e);
+                const video = getTargetVideo(e) || pickBestVisibleVideo();
                 if (video) {
                     e.preventDefault();
                     e.stopImmediatePropagation();
                     toggleVideoFullscreen(video);
+                } else {
+                    ivLogVideoFullscreen('F ignored: videos on page but no target', {
+                        typing: isKeyboardTypingTarget(e.target),
+                        targetTag: e.target && e.target.tagName,
+                    });
                 }
                 return;
             }
