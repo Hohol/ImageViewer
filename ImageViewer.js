@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.27
+// @version      2.28
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2188,6 +2188,19 @@
         return idList.filter((id) => !recentDeleted.has(String(id || '').trim().toLowerCase()));
     }
 
+    function deleteGrokAssetMetadataOne(id) {
+        const assetId = encodeURIComponent(String(id || '').trim());
+        if (!assetId) return Promise.resolve({ ok: false, status: 0 });
+        return fetch('https://grok.com/rest/assets-metadata/' + assetId, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: {
+                'accept': '*/*',
+                'x-xai-request-id': typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())
+            }
+        }).then((res) => ({ ok: res.ok, status: res.status }));
+    }
+
     function deleteGrokMediaPostOne(id) {
         return fetch('https://grok.com/rest/media/post/delete', {
             method: 'POST',
@@ -2198,7 +2211,11 @@
                 'x-xai-request-id': typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())
             },
             body: JSON.stringify({ id })
-        }).then((res) => ({ ok: res.ok, status: res.status }));
+        }).then(async (res) => {
+            if (res.ok) return { ok: true, status: res.status };
+            if (res.status === 404) return deleteGrokAssetMetadataOne(id);
+            return { ok: false, status: res.status };
+        });
     }
 
     function teardownGrokDeleteSelectedButton(sbtn) {
