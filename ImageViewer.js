@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.28
+// @version      2.29
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -318,7 +318,7 @@
         let el = document.elementFromPoint(ivLastPointerX, ivLastPointerY);
         if (!el) return null;
         let video = el.tagName === 'VIDEO' ? el : el.closest ? el.closest('video') : null;
-        if (video && shouldSkipVideoFullscreenTarget(video)) return null;
+        if (video && !isVideoVisibleForFullscreenTarget(video)) return null;
         return video;
     }
 
@@ -330,7 +330,7 @@
         let best = null;
         let bestArea = -1;
         document.querySelectorAll('video').forEach((video) => {
-            if (shouldSkipVideoFullscreenTarget(video)) return;
+            if (!isVideoVisibleForFullscreenTarget(video)) return;
             const r = video.getBoundingClientRect();
             const iw = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
             const ih = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
@@ -3077,17 +3077,51 @@
         return false;
     }
 
+    function isVideoVisibleForFullscreenTarget(video) {
+        if (!video || !video.isConnected || shouldSkipVideoFullscreenTarget(video)) return false;
+        const r = video.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) return false;
+        const style = window.getComputedStyle(video);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const opacity = parseFloat(style.opacity);
+        if (!isNaN(opacity) && opacity < 0.05) return false;
+        return true;
+    }
+
+    function clearVideoFullscreenButtonsInContainer(container) {
+        if (!container) return;
+        container.querySelectorAll('[' + IV_VIDEO_FS_BTN_ATTR + ']').forEach((btn) => btn.remove());
+        container.querySelectorAll('video[data-has-fullscreen-button]').forEach((v) => {
+            delete v.dataset.hasFullscreenButton;
+        });
+    }
+
+    function heroVideoForFullscreenButton(container) {
+        if (!container) return null;
+        let best = null;
+        let bestArea = -1;
+        container.querySelectorAll('video').forEach((video) => {
+            if (!isVideoVisibleForFullscreenTarget(video)) return;
+            const r = video.getBoundingClientRect();
+            const area = r.width * r.height;
+            if (area > bestArea) {
+                bestArea = area;
+                best = video;
+            }
+        });
+        return best;
+    }
+
     function videoFullscreenButtonFor(video) {
         const container = video.parentElement;
         if (!container) return null;
-        return container.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
+        const btn = container.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
+        if (!btn || btn._ivVideoFsVideo !== video) return null;
+        return btn;
     }
 
     function removeVideoFullscreenButton(video) {
-        if (!video) return;
-        const btn = videoFullscreenButtonFor(video);
-        if (btn) btn.remove();
-        delete video.dataset.hasFullscreenButton;
+        clearVideoFullscreenButtonsInContainer(video && video.parentElement);
     }
 
     function createFullscreenButton(video) {
@@ -3095,14 +3129,30 @@
             removeVideoFullscreenButton(video);
             return;
         }
-        if (videoFullscreenButtonFor(video)) return;
-        if (video.dataset.hasFullscreenButton) delete video.dataset.hasFullscreenButton;
+
+        const container = video.parentElement;
+        if (!container) return;
+
+        const hero = heroVideoForFullscreenButton(container);
+        if (!hero) {
+            clearVideoFullscreenButtonsInContainer(container);
+            return;
+        }
+        if (video !== hero) {
+            delete video.dataset.hasFullscreenButton;
+            return;
+        }
+
+        const existing = container.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
+        if (existing && existing._ivVideoFsVideo === hero && hero.isConnected) return;
+        clearVideoFullscreenButtonsInContainer(container);
 
         video.dataset.hasFullscreenButton = 'true';
 
         const button = document.createElement('button');
         button.type = 'button';
         button.setAttribute(IV_VIDEO_FS_BTN_ATTR, '1');
+        button._ivVideoFsVideo = hero;
         button.innerHTML = '⛶';
         button.title = 'Fullscreen (F)';
         Object.assign(button.style, {
@@ -3125,16 +3175,22 @@
             justifyContent: 'center'
         });
 
-        const videoContainer = video.parentElement;
+        const videoContainer = container;
         if (!videoContainer.style.position || videoContainer.style.position === 'static') {
             videoContainer.style.position = 'relative';
         }
 
-        const showButton = () => button.style.opacity = '1';
-        const hideButton = () => button.style.opacity = '0';
-
-        videoContainer.addEventListener('mouseenter', showButton);
-        videoContainer.addEventListener('mouseleave', hideButton);
+        if (!videoContainer.dataset.ivVideoFsHoverBound) {
+            videoContainer.dataset.ivVideoFsHoverBound = '1';
+            videoContainer.addEventListener('mouseenter', () => {
+                const btn = videoContainer.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
+                if (btn) btn.style.opacity = '1';
+            });
+            videoContainer.addEventListener('mouseleave', () => {
+                const btn = videoContainer.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
+                if (btn) btn.style.opacity = '0';
+            });
+        }
 
         button.addEventListener('mouseenter', () => {
             button.style.backgroundColor = 'rgba(0,0,0,0.8)';
@@ -3146,7 +3202,8 @@
         button.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            toggleVideoFullscreen(video);
+            const target = button._ivVideoFsVideo;
+            toggleVideoFullscreen(target && target.isConnected ? target : pickBestVisibleVideo());
         });
 
         videoContainer.appendChild(button);
@@ -3391,17 +3448,17 @@
             return fullscreenElement;
         }
 
+        if (isKeyboardTypingTarget(e.target)) {
+            return null;
+        }
+
         const fromPointer = viewerVideoFromPointer();
         if (fromPointer) return fromPointer;
 
         const bestVisible = pickBestVisibleVideo();
         if (bestVisible) return bestVisible;
 
-        if (!isKeyboardTypingTarget(e.target)) {
-            return document.querySelector('video');
-        }
-
-        return null;
+        return document.querySelector('video');
     }
 
     // Loop region state
