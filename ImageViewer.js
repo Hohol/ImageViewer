@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.29
+// @version      2.30
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -215,20 +215,34 @@
         return false;
     }
 
-    function resyncStuckBrowserFullscreen(elementForReentry) {
+    function resyncStuckBrowserFullscreen(elementForReentry, options) {
+        options = options || {};
         const doc = document;
+        const exitFn =
+            doc.exitFullscreen ||
+            doc.webkitExitFullscreen ||
+            doc.mozCancelFullScreen ||
+            doc.msExitFullscreen;
+        if (!exitFn) return Promise.resolve();
+
+        if (!options.allowEnter) {
+            ivLogFullscreenExit('resync exit-only');
+            return Promise.resolve(exitFn.call(doc)).catch((err) => {
+                ivLogFullscreenExit('resync exit-only failed', { message: err && err.message });
+            });
+        }
+
         const el = elementForReentry || document.documentElement;
         const requestFn =
             el.requestFullscreen ||
             el.webkitRequestFullscreen ||
             el.mozRequestFullScreen ||
             el.msRequestFullscreen;
-        const exitFn =
-            doc.exitFullscreen ||
-            doc.webkitExitFullscreen ||
-            doc.mozCancelFullScreen ||
-            doc.msExitFullscreen;
-        if (!requestFn || !exitFn) return Promise.resolve();
+        if (!requestFn) {
+            return Promise.resolve(exitFn.call(doc)).catch((err) => {
+                ivLogFullscreenExit('resync failed', { message: err && err.message });
+            });
+        }
         return Promise.resolve()
             .then(() => requestFn.call(el))
             .then(() => exitFn.call(doc))
@@ -256,8 +270,8 @@
                 ivLogFullscreenExit('skip resync: not visually fullscreen', { label, force, visual });
                 return;
             }
-            ivLogFullscreenExit('resync enter→exit', { label, force, visual });
-            void resyncStuckBrowserFullscreen(el);
+            ivLogFullscreenExit('resync exit-only (scheduled)', { label, force, visual });
+            void resyncStuckBrowserFullscreen(el, { allowEnter: false });
         };
 
         maybeResync('0ms');
@@ -603,6 +617,11 @@
 
         const el = elementForReentry || document.documentElement;
         const result = exitFn.call(doc);
+
+        if (!isFullscreenApiActive(doc) && isBrowserWindowVisuallyFullscreen()) {
+            ivLogFullscreenExit('immediate resync enter→exit (user gesture)');
+            void resyncStuckBrowserFullscreen(el, { allowEnter: true });
+        }
 
         scheduleFullscreenExitResync(el);
 
@@ -3030,11 +3049,39 @@
         document.querySelectorAll('video').forEach(applySharedVolume);
     }
     
+    /** Prefer a visible hero player; ignore hidden/filmstrip targets. */
+    function resolveVideoForFullscreenToggle(preferred) {
+        if (preferred && isVideoVisibleForFullscreenTarget(preferred)) return preferred;
+        return pickBestVisibleVideo();
+    }
+
+    function requestVideoFullscreen(video) {
+        const requestFn =
+            video.requestFullscreen ||
+            video.webkitRequestFullscreen ||
+            video.mozRequestFullScreen ||
+            video.msRequestFullscreen;
+        if (!requestFn) {
+            ivLogVideoFullscreen('requestFullscreen unavailable on video');
+            return Promise.resolve(false);
+        }
+        ivLogVideoFullscreen('enter fullscreen', {
+            src: (video.currentSrc || video.src || '').slice(0, 120),
+            area: Math.round(video.getBoundingClientRect().width * video.getBoundingClientRect().height),
+        });
+        return Promise.resolve(requestFn.call(video))
+            .then(() => true)
+            .catch((err) => {
+                ivLogVideoFullscreen('requestFullscreen failed', { message: err && err.message });
+                return false;
+            });
+    }
+
     // Toggle fullscreen for video element
     function toggleVideoFullscreen(video) {
-        video = video || pickBestVisibleVideo() || document.querySelector('video');
+        video = resolveVideoForFullscreenToggle(video);
         if (!video) {
-            ivLogVideoFullscreen('toggle aborted: no video element');
+            ivLogVideoFullscreen('toggle aborted: no visible video element');
             return;
         }
 
@@ -3045,28 +3092,40 @@
             doc.mozFullScreenElement ||
             doc.msFullscreenElement;
 
-        if (fsEl) {
-            ivLogVideoFullscreen('exit fullscreen', { fsTag: fsEl.tagName, videoTag: video.tagName });
-            exitFullscreenWithWorkaround(fsEl.tagName === 'VIDEO' ? fsEl : doc.documentElement);
+        if (fsEl === video) {
+            ivLogVideoFullscreen('exit fullscreen', { fsTag: fsEl.tagName });
+            exitFullscreenWithWorkaround(video);
             return;
         }
 
-        const requestFn =
-            video.requestFullscreen ||
-            video.webkitRequestFullscreen ||
-            video.mozRequestFullScreen ||
-            video.msRequestFullscreen;
-        if (!requestFn) {
-            ivLogVideoFullscreen('requestFullscreen unavailable on video');
+        const target = resolveVideoForFullscreenToggle(video);
+        if (!target) {
+            ivLogVideoFullscreen('enter aborted: no visible video');
             return;
         }
-        ivLogVideoFullscreen('enter fullscreen', {
-            src: (video.currentSrc || video.src || '').slice(0, 120),
-            area: Math.round(video.getBoundingClientRect().width * video.getBoundingClientRect().height),
-        });
-        Promise.resolve(requestFn.call(video)).catch((err) => {
-            ivLogVideoFullscreen('requestFullscreen failed', { message: err && err.message });
-        });
+
+        if (fsEl) {
+            ivLogVideoFullscreen('exit then enter video fullscreen (sync)', {
+                fsTag: fsEl.tagName,
+                videoTag: target.tagName,
+            });
+            const exitFn =
+                doc.exitFullscreen ||
+                doc.webkitExitFullscreen ||
+                doc.mozCancelFullScreen ||
+                doc.msExitFullscreen;
+            if (exitFn) {
+                try {
+                    void exitFn.call(doc);
+                } catch (err) {
+                    ivLogVideoFullscreen('exitFullscreen failed (sync handoff)', {
+                        message: err && err.message,
+                    });
+                }
+            }
+        }
+
+        void requestVideoFullscreen(target);
     }
 
     const IV_VIDEO_FS_BTN_ATTR = 'data-iv-video-fs-btn';
@@ -3144,7 +3203,14 @@
         }
 
         const existing = container.querySelector('[' + IV_VIDEO_FS_BTN_ATTR + ']');
-        if (existing && existing._ivVideoFsVideo === hero && hero.isConnected) return;
+        if (
+            existing &&
+            existing._ivVideoFsVideo === hero &&
+            hero.isConnected &&
+            isVideoVisibleForFullscreenTarget(hero)
+        ) {
+            return;
+        }
         clearVideoFullscreenButtonsInContainer(container);
 
         video.dataset.hasFullscreenButton = 'true';
@@ -3202,8 +3268,7 @@
         button.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            const target = button._ivVideoFsVideo;
-            toggleVideoFullscreen(target && target.isConnected ? target : pickBestVisibleVideo());
+            toggleVideoFullscreen(button._ivVideoFsVideo);
         });
 
         videoContainer.appendChild(button);
@@ -3218,10 +3283,30 @@
         else console.log('[Image Viewer video fullscreen]', message);
     }
 
+    let videoFsButtonsRaf = null;
+
+    function pruneOrphanVideoFullscreenButtons() {
+        document.querySelectorAll('[' + IV_VIDEO_FS_BTN_ATTR + ']').forEach((btn) => {
+            const v = btn._ivVideoFsVideo;
+            if (!v || !v.isConnected || !isVideoVisibleForFullscreenTarget(v)) {
+                btn.remove();
+            }
+        });
+    }
+
     function addFullscreenButtonsToVideos() {
+        pruneOrphanVideoFullscreenButtons();
         const videos = document.querySelectorAll('video');
         ivLogVideoFullscreen('ensure buttons', { videoCount: videos.length });
         videos.forEach((video) => createFullscreenButton(video));
+    }
+
+    function scheduleAddFullscreenButtonsToVideos() {
+        if (videoFsButtonsRaf !== null) cancelAnimationFrame(videoFsButtonsRaf);
+        videoFsButtonsRaf = requestAnimationFrame(() => {
+            videoFsButtonsRaf = null;
+            addFullscreenButtonsToVideos();
+        });
     }
     
     // Clear loop when the looped video's source changes (SPA navigation reuses same element)
@@ -3233,9 +3318,33 @@
         }
     }, true);
     
+    function mutationsAffectVideoButtons(mutations) {
+        for (const mutation of mutations) {
+            if (mutation.type === 'attributes') {
+                const t = mutation.target;
+                if (t && t.tagName === 'VIDEO') return true;
+                continue;
+            }
+            if (mutation.type !== 'childList') continue;
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType !== 1) continue;
+                if (node.tagName === 'VIDEO') return true;
+                if (node.querySelector && node.querySelector('video')) return true;
+            }
+            for (const node of mutation.removedNodes) {
+                if (node.nodeType !== 1) continue;
+                if (node.tagName === 'VIDEO') return true;
+                if (node.querySelector && node.querySelector('video')) return true;
+            }
+        }
+        return false;
+    }
+
     // Watch for new videos being added to the page
     const videoObserver = new MutationObserver((mutations) => {
-        addFullscreenButtonsToVideos();
+        if (mutationsAffectVideoButtons(mutations)) {
+            scheduleAddFullscreenButtonsToVideos();
+        }
         scheduleImaginePostDeleteButtonsSync();
         scheduleGrokImagineSavedKeepSync();
         // Apply shared volume to any newly added videos (only on post pages)
@@ -3254,18 +3363,28 @@
     
     // Start observing when DOM is ready
     if (document.body) {
-        addFullscreenButtonsToVideos();
+        scheduleAddFullscreenButtonsToVideos();
         scheduleImaginePostDeleteButtonsSync();
         scheduleGrokImagineSavedKeepSync();
         if (isPostPage()) applySharedVolumeToAll();
-        videoObserver.observe(document.body, { childList: true, subtree: true });
+        videoObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src', 'class', 'style', 'hidden'],
+        });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
-            addFullscreenButtonsToVideos();
+            scheduleAddFullscreenButtonsToVideos();
             scheduleImaginePostDeleteButtonsSync();
             scheduleGrokImagineSavedKeepSync();
             if (isPostPage()) applySharedVolumeToAll();
-            videoObserver.observe(document.body, { childList: true, subtree: true });
+            videoObserver.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['src', 'class', 'style', 'hidden'],
+            });
         });
     }
 
@@ -3276,7 +3395,7 @@
 
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) return;
-        addFullscreenButtonsToVideos();
+        scheduleAddFullscreenButtonsToVideos();
         ivLogVideoFullscreen('tab visible: refreshed video buttons', {
             videoCount: document.querySelectorAll('video').length,
             apiFs: isFullscreenApiActive(),
@@ -3354,6 +3473,7 @@
             });
         } else if (!fullscreenElement) {
             stopCursorAutoHide();
+            scheduleAddFullscreenButtonsToVideos();
             // Exited fullscreen - restore original styles and remove listeners
             const videos = document.querySelectorAll('video[data-original-style]');
             videos.forEach(video => {
@@ -3458,7 +3578,7 @@
         const bestVisible = pickBestVisibleVideo();
         if (bestVisible) return bestVisible;
 
-        return document.querySelector('video');
+        return null;
     }
 
     // Loop region state
@@ -3792,7 +3912,7 @@
                 return;
             }
             if (document.querySelectorAll('video').length > 0) {
-                const video = getTargetVideo(e) || pickBestVisibleVideo();
+                const video = getTargetVideo(e);
                 if (video) {
                     e.preventDefault();
                     e.stopImmediatePropagation();
