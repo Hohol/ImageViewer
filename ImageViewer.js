@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.30
+// @version      2.31
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1044,6 +1044,29 @@
         if (!img.complete) onSrcSettled();
     }
 
+    function collectNavigableImages() {
+        const allImgs = Array.from(document.querySelectorAll('img'));
+        const seen = new Set();
+        const list = [];
+        for (const imgEl of allImgs) {
+            if (shouldSkipImage(imgEl)) continue;
+            const src = imgEl.src;
+            if (!src || seen.has(src)) continue;
+            seen.add(src);
+            list.push(imgEl);
+        }
+        return list;
+    }
+
+    function pickRandomIndex(length, avoid) {
+        if (length <= 0) return -1;
+        if (length === 1) return 0;
+        if (avoid < 0 || avoid >= length) return Math.floor(Math.random() * length);
+        let i = Math.floor(Math.random() * (length - 1));
+        if (i >= avoid) i += 1;
+        return i;
+    }
+
     function navigate(delta) {
         const next = currentIndex + delta;
         if (next < 0 || next >= imgs.length) return;
@@ -1052,22 +1075,33 @@
         displayImageInOverlay(imgs[currentIndex]);
     }
 
+    function navigateToRandomImage() {
+        const list = collectNavigableImages();
+        if (!list.length) return false;
+
+        if (overlay) {
+            imgs = list;
+            const currentSrc = overlayImage?.src || imgs[currentIndex]?.src;
+            currentIndex = currentSrc ? imgs.findIndex((imgEl) => imgEl.src === currentSrc) : -1;
+            const next = pickRandomIndex(imgs.length, currentIndex);
+            if (next < 0) return false;
+            saveOverlayNativeScrollForCurrent();
+            currentIndex = next;
+            displayImageInOverlay(imgs[currentIndex]);
+            return true;
+        }
+
+        const next = pickRandomIndex(list.length, -1);
+        if (next < 0) return false;
+        showFullscreen(list[next]);
+        return true;
+    }
+
     function showFullscreen(img) {
-        if (isExcludedImage(img)) return;
+        if (!img || shouldSkipImage(img)) return;
         ivContextMenuInFullscreen = false;
         
-        // Build unique image list by src, skipping certain images, include all others
-        const allImgs = Array.from(document.querySelectorAll('img'));
-        const seen = new Set();
-        imgs = [];
-        for (const imgEl of allImgs) {
-            if (shouldSkipImage(imgEl)) continue;
-            const src = imgEl.src;
-            if (!seen.has(src)) {
-                seen.add(src);
-                imgs.push(imgEl);
-            }
-        }
+        imgs = collectNavigableImages();
         
         // Find index by src, not by element reference
         currentIndex = imgs.findIndex(imgEl => imgEl.src === img.src);
@@ -1424,6 +1458,7 @@
             items: [
                 ['H', 'Show keyboard shortcuts'],
                 ['F or /', 'Fullscreen image or video (exit image fullscreen)'],
+                ['R', 'Random image (page or fullscreen)'],
                 ['T', 'Open image in new tab (page or fullscreen)'],
                 ['C', 'Copy image to clipboard (page or fullscreen)'],
             ],
@@ -4095,6 +4130,23 @@
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 showFullscreen(img);
+            }
+            return;
+        }
+
+        // R: random navigable image (overlay: stay fullscreen; page: open fullscreen)
+        if (e.code === 'KeyR') {
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (isKeyboardTypingTarget(e.target)) return;
+            const fsEl =
+                document.fullscreenElement ||
+                document.webkitFullscreenElement ||
+                document.mozFullScreenElement ||
+                document.msFullscreenElement;
+            if (fsEl && fsEl.tagName === 'VIDEO') return;
+            if (navigateToRandomImage()) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
             }
             return;
         }
