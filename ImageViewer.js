@@ -431,6 +431,35 @@
         return h === 'chatgpt.com' || h.endsWith('.chatgpt.com');
     }
 
+    // ChatGPT scrolls the conversation in a column-reverse container, while
+    // the browser's native Cmd+Arrow shortcuts still target the document.
+    // Restore the usual macOS jump-to-start/end behavior for the timeline.
+    function handleChatGPTDocumentEdgeKeydown(e) {
+        if (
+            !isChatGPTHost() ||
+            overlay ||
+            !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey ||
+            (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') ||
+            isKeyboardTypingTarget(e.target)
+        ) {
+            return;
+        }
+
+        const timeline = document.querySelector('[data-app-action-timeline-scroll]');
+        if (!timeline || timeline.scrollHeight <= timeline.clientHeight + 1) return;
+
+        const isReverse = getComputedStyle(timeline).flexDirection === 'column-reverse';
+        const towardStart = e.key === 'ArrowUp';
+        timeline.scrollTop = isReverse
+            ? (towardStart ? -timeline.scrollHeight : 0)
+            : (towardStart ? 0 : timeline.scrollHeight);
+
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }
+
+    window.addEventListener('keydown', handleChatGPTDocumentEdgeKeydown, true);
+
     function isChatGPTProfileImage(img) {
         if (!isChatGPTHost()) return false;
         let ancestor = img.parentElement;
