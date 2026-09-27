@@ -124,6 +124,27 @@
         }
     }
 
+    function onOverlayWheel(e) {
+        if (!overlay || !overlayFitNative) return;
+
+        const linePx = 16;
+        const xScale = e.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? linePx
+            : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+              ? overlay.clientWidth
+              : 1;
+        const yScale = e.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? linePx
+            : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+              ? overlay.clientHeight
+              : 1;
+
+        e.preventDefault();
+        e.stopPropagation();
+        overlay.scrollLeft += e.deltaX * xScale;
+        overlay.scrollTop += e.deltaY * yScale;
+    }
+
     const IV_CURSOR_HIDE_MS = 2000;
     let ivCursorHideTimer = null;
     let ivCursorHideOnMove = null;
@@ -1210,6 +1231,8 @@
 
         // Close overlay on click
         overlay.addEventListener('click', hideFullscreen);
+        // Fixed navigation controls can otherwise intercept trackpad/wheel scrolling.
+        overlay.addEventListener('wheel', onOverlayWheel, { capture: true, passive: false });
         document.body.appendChild(overlay);
         startCursorAutoHide(() => !!overlay, {
             onShow: () => {
