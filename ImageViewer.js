@@ -1648,6 +1648,8 @@
         );
     }
 
+    /** Keep/Unkeep buttons and the keep-status filter for Grok Imagine. */
+    const IV_GROK_IMAGINE_KEEP_UI_ENABLED = false;
     const IV_GROK_SAVED_KEPT_KEY = 'ivGrokImagineSavedKeptIds';
     const IV_GROK_SAVED_KEPT_FILTER_KEY = 'ivGrokImagineSavedShowUnkeptOnly';
     const IV_GROK_SAVED_FILTER_ROOT_ID = 'iv-grok-saved-kept-filter';
@@ -1855,8 +1857,9 @@
 
     function syncGrokImagineSavedKeepUi() {
         const filterExisting = document.getElementById(IV_GROK_SAVED_FILTER_ROOT_ID);
-        if (!isGrokImagineSavedPage()) {
+        if (!IV_GROK_IMAGINE_KEEP_UI_ENABLED || !isGrokImagineSavedPage()) {
             if (filterExisting) filterExisting.remove();
+            document.getElementById('iv-grok-saved-filter-chrome')?.remove();
             document.querySelectorAll('[data-iv-grok-keep-btn]').forEach((b) => b.remove());
             document.querySelectorAll('[data-iv-grok-saved-card]').forEach((el) => {
                 el.style.display = '';
@@ -2812,7 +2815,7 @@
 
         const postSlugId = imaginePostSlugMediaIdFromPath();
         let keepBtn = keepExisting;
-        if (!postSlugId) {
+        if (!IV_GROK_IMAGINE_KEEP_UI_ENABLED || !postSlugId) {
             if (keepBtn) keepBtn.remove();
         } else {
             if (!keepBtn) {
