@@ -15,5 +15,6 @@
 ## Git and releases
 
 - Never commit unless the user explicitly asks.
+- When the user requests a commit, run the required `git add` and `git commit` commands with elevated sandbox permission immediately; `.git` is protected in the normal workspace-write profile.
 - Do not increment the `@version` field during ordinary local development.
 - If a requested push or release includes changes to `ImageViewer.js`, increment `@version` once before pushing. Documentation-only and other non-script changes do not require a version bump.
