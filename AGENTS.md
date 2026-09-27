@@ -11,5 +11,4 @@
 
 - Never commit unless the user explicitly asks.
 - Do not increment the `@version` field during ordinary local development.
-- Increment `@version` once only when preparing a requested push or release.
-  
+- If a requested push or release includes changes to `ImageViewer.js`, increment `@version` once before pushing. Documentation-only and other non-script changes do not require a version bump.
