@@ -1139,7 +1139,7 @@
         const createNav = (symbol, handler) => {
             const btn = document.createElement('div');
             Object.assign(btn.style, {
-                position: 'absolute', top: 0, bottom: 0,
+                position: 'fixed', top: 0, bottom: 0,
                 width: '10%', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 backgroundColor: 'transparent', color: 'rgba(255,255,255,0.3)',
                 fontSize: '3rem', cursor: 'pointer', userSelect: 'none', zIndex: 2147483648
@@ -1155,7 +1155,7 @@
         // Scroll button
         const scrollBtn = document.createElement('div');
         Object.assign(scrollBtn.style, {
-            position: 'absolute', top: '10px', right: '10px',
+            position: 'fixed', top: '10px', right: '10px',
             width: '3rem', height: '3rem', display: 'flex', alignItems: 'center', justifyContent: 'center',
             backgroundColor: 'transparent', color: 'rgba(255,255,255,0.3)',
             fontSize: '2rem', cursor: 'pointer', userSelect: 'none', zIndex: 2147483648
