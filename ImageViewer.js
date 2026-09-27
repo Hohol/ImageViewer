@@ -426,6 +426,20 @@
         return location.hostname === 'gemini.google.com';
     }
 
+    function isChatGPTHost() {
+        const h = location.hostname;
+        return h === 'chatgpt.com' || h.endsWith('.chatgpt.com');
+    }
+
+    function isChatGPTProfileImage(img) {
+        if (!isChatGPTHost()) return false;
+        let ancestor = img.parentElement;
+        for (let depth = 0; ancestor && depth < 6; depth++, ancestor = ancestor.parentElement) {
+            if (ancestor.querySelector(':scope > button[aria-label="Open profile menu"]')) return true;
+        }
+        return false;
+    }
+
     function viewerImageSrcForNewTab(img) {
         return img.currentSrc || img.getAttribute('src') || img.src || '';
     }
@@ -677,6 +691,7 @@
     function shouldSkipImage(img) {
         if (isGrokHost() && !isGrokOptInImage(img)) return true;
         if (isGeminiHost() && !isGeminiOptInImage(img)) return true;
+        if (isChatGPTProfileImage(img)) return true;
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
         if (alt === 'User' || alt === 'pfp') return true;
