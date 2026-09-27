@@ -8,6 +8,10 @@
 - It augments these sites' interfaces in various ways, primarily to improve image and video viewing.
 - `temp/` contains ignored browser snapshots and debugging artifacts. Use them only when relevant to a reported bug; they are not production source.
 
+## Project terminology
+
+- "Fullscreen mode" means ImageViewer's full-screen image-viewing overlay, opened for an eligible image by clicking it or pressing F or the slash key; it does not mean the browser's ordinary fullscreen mode (for example, F11).
+
 ## Git and releases
 
 - Never commit unless the user explicitly asks.
