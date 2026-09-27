@@ -5,6 +5,7 @@
 - This is a dependency-free userscript for Tampermonkey and Violentmonkey.
 - The shipped source is `ImageViewer.js`; there is no build step or package manager.
 - It runs on ChatGPT, Gemini, and Grok.
+- It augments these sites' interfaces in various ways, primarily to improve image and video viewing.
 - `temp/` contains ignored browser snapshots and debugging artifacts. Use them only when relevant to a reported bug; they are not production source.
 
 ## Git and releases
