@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.31
+// @version      2.32
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -499,14 +499,25 @@
         return /^https?:/i.test(src) || src.startsWith('blob:');
     }
 
-    function viewerImageFromEventTarget(target) {
+    function imageFromEventTarget(target) {
         let el = target;
         if (!el || !el.nodeType) return null;
         if (el.nodeType !== 1) el = el.parentElement;
         if (!el) return null;
-        if (el.tagName !== 'IMG') el = el.closest('img');
+        if (el.tagName !== 'IMG') {
+            // Fresh ChatGPT results can target the preview button instead of its image.
+            const preview = isChatGPTHost()
+                ? el.closest('button[data-testid="generated-image-preview"]')
+                : null;
+            el = preview ? preview.querySelector('img') : el.closest('img');
+        }
         if (!el || el.tagName !== 'IMG' || isExcludedImage(el)) return null;
-        return isViewerOpenInTabImageSrc(viewerImageSrcForNewTab(el)) ? el : null;
+        return el;
+    }
+
+    function viewerImageFromEventTarget(target) {
+        const img = imageFromEventTarget(target);
+        return img && isViewerOpenInTabImageSrc(viewerImageSrcForNewTab(img)) ? img : null;
     }
 
     let ivLastPointerX = -1;
@@ -1246,7 +1257,7 @@
 
     // Intercept left-click and dragstart on non-excluded images
     ['click', 'dragstart'].forEach(evt => document.addEventListener(evt, e => {
-        if (!overlay && e.target.tagName === 'IMG' && !isExcludedImage(e.target) && e.button === 0) {
+        if (!overlay && e.button === 0 && imageFromEventTarget(e.target)) {
             e.preventDefault(); e.stopPropagation();
         }
     }, true));
@@ -1270,8 +1281,9 @@
 
     // Open on left-click for non-excluded images
     document.addEventListener('click', e => {
-        if (!overlay && e.button === 0 && e.target.tagName === 'IMG' && !isExcludedImage(e.target)) {
-            showFullscreen(e.target);
+        if (!overlay && e.button === 0) {
+            const img = imageFromEventTarget(e.target);
+            if (img) showFullscreen(img);
         }
     }, true);
 

@@ -17,3 +17,8 @@
 - Never commit unless the user explicitly asks.
 - Do not increment the `@version` field during ordinary local development.
 - If a requested push or release includes changes to `ImageViewer.js`, increment `@version` once before pushing. Documentation-only and other non-script changes do not require a version bump.
+
+## Clipboard
+
+- After completing any request that changes `ImageViewer.js`, copy the complete current file to the macOS clipboard as the final action using `/usr/bin/pbcopy < ImageViewer.js`.
+- Always run this command with elevated sandbox permission (`sandbox_permissions: "require_escalated"`); clipboard access is blocked in the normal workspace-write sandbox.
