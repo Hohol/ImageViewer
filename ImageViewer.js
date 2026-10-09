@@ -49,6 +49,7 @@
     let overlayImage = null;
     let ivChatGPTNavigationDebug = null;
     let ivChatGPTGallery = null;
+    let imageNavigationSearch = null;
     /** false: fit to viewport; true: natural pixels + scroll. Remembered for this page session. */
     let overlayFitNative = false;
     let overlayScrollKeys = new Set();
@@ -852,6 +853,7 @@
         }
 
         function updateProgress(session) {
+            if (!session.label) return;
             const count = [...records.values()].filter((record) => record.url).length;
             session.label.textContent = `Loading chat images… ${count} saved · Esc to cancel`;
         }
@@ -895,15 +897,17 @@
             return false;
         }
 
-        function nextScanStep(session) {
+        function nextScanStep(session, direction = -1) {
             const root = session.root;
             const overlapStep = Math.max(100, root.clientHeight * 0.7);
             const top = root.getBoundingClientRect().top + root.clientTop;
+            const boundary = direction < 0 ? top : top + root.clientHeight;
             const turns = Array.from(root.querySelectorAll(turnSelector));
             const rects = turns.map((turn) => turn.getBoundingClientRect());
-            let index = rects.findIndex((rect) => rect.top <= top + 1 && rect.bottom > top + 1);
-            let edge = top;
-            while (index >= 0) {
+            const probe = boundary - direction;
+            let index = rects.findIndex((rect) => rect.top <= probe && rect.bottom > probe);
+            let edge = boundary;
+            while (index >= 0 && index < turns.length) {
                 const turn = turns[index];
                 const rect = rects[index];
                 if (session.checkedTurns.get(turn) !== turnKey(turn) ||
@@ -911,13 +915,13 @@
                     turn.querySelector('img, picture, [data-testid="generated-image-gallery"], ' +
                         '[data-testid="generated-image-preview"], [data-image-transparency-backdrop-scope], ' +
                         '[aria-busy="true"], [role="progressbar"], [data-virtualized-turn-content]') ||
-                    rect.bottom < edge - 32) break;
-                edge = rect.top;
-                index--;
+                    (direction < 0 ? rect.bottom < edge - 32 : rect.top > edge + 32)) break;
+                edge = direction < 0 ? rect.top : rect.bottom;
+                index += direction;
             }
             // Jump only inside contiguous, mounted, inspected text. Keep an overlap
-            // before its older edge so the next unseen/image-bearing turn gets visited.
-            const step = Math.max(overlapStep, top - edge - root.clientHeight * 0.3);
+            // before its far edge so the next unseen/image-bearing turn gets visited.
+            const step = Math.max(overlapStep, (edge - boundary) * direction - root.clientHeight * 0.3);
             if (step > overlapStep) log('text-skip', { pixels: Math.round(step) });
             return step;
         }
@@ -936,6 +940,7 @@
         }
 
         async function scan() {
+            if (run?.navigation) { cancel(false); await run.done; }
             if (run) return;
             const id = syncConversation();
             const root = timeline();
@@ -1044,6 +1049,96 @@
             for (const controller of run.controllers) controller.abort();
         }
 
+        async function findNext(selected, direction, isCurrent) {
+            if (run?.navigation) { cancel(false); await run.done; }
+            if (run || !isCurrent()) return null;
+            const id = syncConversation();
+            const root = timeline();
+            const key = imageKeys.get(selected);
+            if (!id || !root || !key || !isCurrent()) return null;
+            mounted();
+            const record = records.get(key);
+            const position = turnPositions.get(record?.turn);
+            if (position === undefined) return null;
+            let finish;
+            const session = {
+                navigation: true, root, id, epoch: generation, cancelled: false, timeouts: 0,
+                controllers: new Set(), attempted: new Set(), seen: new Set(), checkedTurns: new WeakMap(),
+                done: new Promise((resolve) => { finish = resolve; }),
+            };
+            run = session;
+            const oldBehavior = root.style.getPropertyValue('scroll-behavior');
+            const oldPriority = root.style.getPropertyPriority('scroll-behavior');
+            root.style.setProperty('scroll-behavior', 'auto', 'important');
+            const onManualScroll = () => cancel(false);
+            root.addEventListener('wheel', onManualScroll, { passive: true });
+            root.addEventListener('touchstart', onManualScroll, { passive: true });
+            const label = direction < 0 ? 'earlier' : 'later';
+            showViewerToast(`Looking for ${label} images… · Esc to close`, 30000);
+            log('navigation-start', { direction });
+            let found = false;
+            let reachedEnd = false;
+            try {
+                // The viewer may be showing a cached turn far from the mounted window.
+                // Resume at that turn, rather than at the page's unrelated scroll position.
+                setFromBottom(root, Math.max(0, Math.min(position, root.scrollHeight - root.clientHeight)));
+                const started = performance.now();
+                while (active(session) && isCurrent()) {
+                    await settle(session);
+                    if (!active(session) || !isCurrent()) break;
+                    const list = images() || [];
+                    const index = list.findIndex((img) => imageKeys.get(img) === key);
+                    const next = index >= 0 ? list[index + direction] : null;
+                    if (next && records.get(imageKeys.get(next))?.url) {
+                        found = true;
+                        return { list, index: index + direction };
+                    }
+                    if (performance.now() - started > 20 * 60 * 1000) break;
+                    const distance = fromBottom(root);
+                    const atEnd = () => direction < 0
+                        ? fromBottom(root) >= root.scrollHeight - root.clientHeight - 2
+                        : fromBottom(root) <= 2;
+                    if (atEnd()) {
+                        const before = signature(root);
+                        await settle(session, 4000);
+                        if (!active(session) || !isCurrent()) break;
+                        // Pagination can add images without moving the viewport. Check
+                        // them again before declaring that the chat has ended.
+                        const updated = images() || [];
+                        const at = updated.findIndex((img) => imageKeys.get(img) === key);
+                        const candidate = at >= 0 ? updated[at + direction] : null;
+                        if (candidate && records.get(imageKeys.get(candidate))?.url) {
+                            found = true;
+                            return { list: updated, index: at + direction };
+                        }
+                        if (before === signature(root) && atEnd()) { reachedEnd = true; break; }
+                        continue;
+                    }
+                    setFromBottom(root, distance - direction * nextScanStep(session, direction));
+                }
+            } catch (e) {
+                log('navigation-error', { reason: e.name || 'Error' });
+            } finally {
+                const cancelled = session.cancelled;
+                session.cancelled = true;
+                for (const controller of session.controllers) controller.abort();
+                root.style.setProperty('scroll-behavior', oldBehavior, oldPriority);
+                root.removeEventListener('wheel', onManualScroll);
+                root.removeEventListener('touchstart', onManualScroll);
+                if (run === session) run = null;
+                finish();
+                if (isCurrent() && session.id === conversationId()) {
+                    if (found) showViewerToast('Image loaded', 1000);
+                    else showViewerToast(reachedEnd && !session.timeouts && !session.limit
+                        ? `No ${label} images found`
+                        : `Image search ${cancelled ? 'stopped' : 'incomplete'} · Press the arrow again to retry`, 4000);
+                }
+                log('navigation-finish', { direction, found, reachedEnd, timeouts: session.timeouts });
+                captureMounted();
+            }
+            return null;
+        }
+
         let observedRoot = null;
         let captureTimer = null;
         const observer = new MutationObserver((mutations) => {
@@ -1099,8 +1194,9 @@
         window.addEventListener('pageshow', scheduleCapture);
         captureMounted();
         return {
-            scan, cancel, images,
-            get scanning() { return !!run; },
+            scan, cancel, images, findNext,
+            cancelNavigation() { if (run?.navigation) cancel(false); },
+            get scanning() { return !!run && !run.navigation; },
             key: (img) => imageKeys.get(img),
             original(img) {
                 const key = imageKeys.get(img);
@@ -1455,6 +1551,7 @@
     }
 
     function clearOverlay() {
+        cancelImageNavigationSearch();
         if (!overlay) return;
         ivChatGPTNavigationDebug?.record('overlay-close');
         ivLogFullscreenExit('clearOverlay');
@@ -1815,7 +1912,15 @@
         return i;
     }
 
-    function navigate(delta) {
+    function cancelImageNavigationSearch() {
+        if (imageNavigationSearch) showViewerToast('Image search stopped', 1000);
+        imageNavigationSearch = null;
+        ivChatGPTGallery?.cancelNavigation();
+    }
+
+    async function navigate(delta) {
+        if (imageNavigationSearch?.delta === delta) return;
+        cancelImageNavigationSearch();
         if (overlay && ivChatGPTGallery) {
             const selected = imgs[currentIndex];
             const key = ivChatGPTGallery.key(selected);
@@ -1832,13 +1937,30 @@
         ivChatGPTNavigationDebug?.record('navigate', {
             delta, next, blocked: next < 0 || next >= imgs.length,
         });
-        if (next < 0 || next >= imgs.length) return;
+        if (next < 0 || next >= imgs.length) {
+            if (!overlay || !ivChatGPTGallery) return;
+            const request = { delta, overlay };
+            imageNavigationSearch = request;
+            const isCurrent = () => imageNavigationSearch === request && overlay === request.overlay;
+            try {
+                const result = await ivChatGPTGallery.findNext(imgs[currentIndex], delta, isCurrent);
+                if (!result || !isCurrent()) return;
+                saveOverlayNativeScrollForCurrent();
+                imgs = result.list;
+                currentIndex = result.index;
+                displayImageInOverlay(imgs[currentIndex]);
+            } finally {
+                if (imageNavigationSearch === request) imageNavigationSearch = null;
+            }
+            return;
+        }
         saveOverlayNativeScrollForCurrent();
         currentIndex = next;
         displayImageInOverlay(imgs[currentIndex]);
     }
 
     function navigateToRandomImage() {
+        cancelImageNavigationSearch();
         const list = collectNavigableImages();
         ivChatGPTNavigationDebug?.record('random', { collected: list.length });
         if (!list.length) return false;
