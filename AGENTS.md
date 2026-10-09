@@ -1,5 +1,7 @@
 # ImageViewer project
 
+This tracked file contains shared project knowledge useful across machines. Keep personal preferences and machine-specific instructions in the untracked `AGENTS.override.md` file.
+
 ## Overview
 
 - This is a dependency-free userscript for Tampermonkey and Violentmonkey.
@@ -11,14 +13,3 @@
 ## Project terminology
 
 - "Fullscreen mode" means ImageViewer's full-screen image-viewing overlay, opened for an eligible image by clicking it or pressing F or the slash key; it does not mean the browser's ordinary fullscreen mode (for example, F11).
-
-## Git and releases
-
-- Never commit unless the user explicitly asks.
-- Do not increment the `@version` field during ordinary local development.
-- If a requested push or release includes changes to `ImageViewer.js`, increment `@version` once before pushing. Documentation-only and other non-script changes do not require a version bump.
-
-## Clipboard
-
-- After completing any request that changes `ImageViewer.js`, copy the complete current file to the macOS clipboard as the final action using `/usr/bin/pbcopy < ImageViewer.js`.
-- Always run this command with elevated sandbox permission (`sandbox_permissions: "require_escalated"`); clipboard access is blocked in the normal workspace-write sandbox.
