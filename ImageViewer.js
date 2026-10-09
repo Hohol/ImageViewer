@@ -676,7 +676,7 @@
         }
 
         function reset() {
-            if (run) { run.cancelled = true; run.restore = false; }
+            if (run) run.cancelled = true;
             passive.cancelled = true;
             for (const controller of passive.controllers) controller.abort();
             passive = newPassiveSession();
@@ -926,29 +926,14 @@
             return step;
         }
 
-        async function restorePosition(session) {
-            if (!session.restore || session.id !== conversationId() || session.root !== timeline()) return;
-            setFromBottom(session.root, session.savedDistance);
-            // Heights can change as the saved window remounts. Prefer its original turn anchor.
-            for (let i = 0; i < 10; i++) {
-                await pause(150);
-                if (!session.restore || session.id !== conversationId() || session.root !== timeline()) return;
-                const anchor = Array.from(session.root.querySelectorAll(turnSelector)).find((turn) => turnKey(turn) === session.anchor?.key);
-                if (anchor) session.root.scrollTop += anchor.getBoundingClientRect().top -
-                    session.root.getBoundingClientRect().top - session.anchor.offset;
-            }
-        }
-
         async function scan() {
-            if (run?.navigation) { cancel(false); await run.done; }
+            if (run?.navigation) { cancel(); await run.done; }
             if (run) return;
             const id = syncConversation();
             const root = timeline();
             if (!id || !root) { showViewerToast('Open a ChatGPT conversation first'); return; }
             if (overlay) { hideFullscreen(); clearOverlay(); }
             hideViewerHotkeysModal();
-            const top = root.getBoundingClientRect().top;
-            const anchor = Array.from(root.querySelectorAll(turnSelector)).find((turn) => turn.getBoundingClientRect().bottom > top);
             const panel = document.createElement('div');
             panel.id = 'iv-chatgpt-scan';
             panel.setAttribute('role', 'status');
@@ -966,24 +951,22 @@
             panel.append(label, cancelButton);
             document.body.appendChild(panel);
             const session = {
-                root, id, epoch: generation, label, cancelled: false, restore: true, timeouts: 0,
+                root, id, epoch: generation, label, cancelled: false, timeouts: 0,
                 controllers: new Set(), attempted: new Set(), seen: new Set(),
                 checkedTurns: new WeakMap(),
-                savedDistance: fromBottom(root),
-                anchor: anchor ? { key: turnKey(anchor), offset: anchor.getBoundingClientRect().top - top } : null,
             };
             const previousOrder = turnOrder;
             turnOrder = [];
             run = session;
             cancelButton.addEventListener('click', () => cancel());
-            const onManualScroll = () => cancel(false);
+            const onManualScroll = () => cancel();
             root.addEventListener('wheel', onManualScroll, { passive: true });
             root.addEventListener('touchstart', onManualScroll, { passive: true });
             const oldBehavior = root.style.getPropertyValue('scroll-behavior');
             const oldPriority = root.style.getPropertyPriority('scroll-behavior');
             root.style.setProperty('scroll-behavior', 'auto', 'important');
             let completed = false;
-            log('start', { savedDistance: session.savedDistance, anchor: session.anchor });
+            log('start', { distance: fromBottom(root) });
             try {
                 setFromBottom(root, 0);
                 const started = performance.now();
@@ -1023,8 +1006,7 @@
                         records.delete(key);
                     }
                 }
-                label.textContent = 'Restoring your position…';
-                await restorePosition(session);
+                // Leave completed scans at the oldest turn, or cancelled scans where they stopped.
                 root.style.setProperty('scroll-behavior', oldBehavior, oldPriority);
                 root.removeEventListener('wheel', onManualScroll);
                 root.removeEventListener('touchstart', onManualScroll);
@@ -1042,15 +1024,14 @@
             }
         }
 
-        function cancel(restore = true) {
+        function cancel() {
             if (!run) return;
             run.cancelled = true;
-            run.restore = restore;
             for (const controller of run.controllers) controller.abort();
         }
 
         async function findNext(selected, direction, isCurrent) {
-            if (run?.navigation) { cancel(false); await run.done; }
+            if (run?.navigation) { cancel(); await run.done; }
             if (run || !isCurrent()) return null;
             const id = syncConversation();
             const root = timeline();
@@ -1070,7 +1051,7 @@
             const oldBehavior = root.style.getPropertyValue('scroll-behavior');
             const oldPriority = root.style.getPropertyPriority('scroll-behavior');
             root.style.setProperty('scroll-behavior', 'auto', 'important');
-            const onManualScroll = () => cancel(false);
+            const onManualScroll = () => cancel();
             root.addEventListener('wheel', onManualScroll, { passive: true });
             root.addEventListener('touchstart', onManualScroll, { passive: true });
             const label = direction < 0 ? 'earlier' : 'later';
@@ -1195,7 +1176,7 @@
         captureMounted();
         return {
             scan, cancel, images, findNext,
-            cancelNavigation() { if (run?.navigation) cancel(false); },
+            cancelNavigation() { if (run?.navigation) cancel(); },
             get scanning() { return !!run && !run.navigation; },
             key: (img) => imageKeys.get(img),
             original(img) {
@@ -5004,7 +4985,7 @@
                 e.stopImmediatePropagation();
                 ivChatGPTGallery.cancel();
             } else if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
-                ivChatGPTGallery.cancel(false);
+                ivChatGPTGallery.cancel();
             }
             return;
         }
