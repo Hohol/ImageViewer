@@ -47,6 +47,8 @@
     let imgs = [];
     let currentIndex = -1;
     let overlayImage = null;
+    let ivChatGPTNavigationDebug = null;
+    let ivChatGPTGallery = null;
     /** false: fit to viewport; true: natural pixels + scroll. Remembered for this page session. */
     let overlayFitNative = false;
     let overlayScrollKeys = new Set();
@@ -459,6 +461,654 @@
         return h === 'chatgpt.com' || h.endsWith('.chatgpt.com');
     }
 
+    /** Temporary diagnostics: set false after investigating ChatGPT's virtualized timeline. */
+    const IV_CHATGPT_NAVIGATION_DEBUG = true;
+
+    function createChatGPTNavigationDebug() {
+        if (!IV_CHATGPT_NAVIGATION_DEBUG || !isChatGPTHost()) return null;
+        const prefix = '[ImageViewer ChatGPT navigation]';
+        const turnSelector = '[data-turn-key], [data-testid^="conversation-turn-"]';
+        const timelineSelector = '[data-app-action-timeline-scroll]';
+        const nodeIds = new WeakMap();
+        let nextNodeId = 1;
+        let previous = null;
+        let timer = null;
+        let running = false;
+        let sequence = 0;
+        const pending = new Set();
+        const events = [];
+        const maxEvents = 300;
+
+        function nodeId(node) {
+            if (!node) return null;
+            if (!nodeIds.has(node)) nodeIds.set(node, nextNodeId++);
+            return nodeIds.get(node);
+        }
+
+        // Compare complete URLs without putting signed URLs, image bytes, or chat text in logs.
+        function sourceId(src) {
+            if (!src) return null;
+            let hash = 2166136261;
+            for (let i = 0; i < src.length; i++) hash = Math.imul(hash ^ src.charCodeAt(i), 16777619);
+            return `${src.split(':', 1)[0]}:${(hash >>> 0).toString(16)}`;
+        }
+
+        function turnKey(turn) {
+            return turn?.getAttribute('data-turn-key') || turn?.getAttribute('data-testid') || null;
+        }
+
+        function imageState(img) {
+            if (!img) return null;
+            const turn = img.closest(turnSelector);
+            const message = img.closest('[data-chatgpt-search-message-ids], [data-message-id]');
+            const rect = img.getBoundingClientRect();
+            return {
+                node: nodeId(img), turn: turnKey(turn),
+                message: message?.getAttribute('data-chatgpt-search-message-ids') ||
+                    message?.getAttribute('data-message-id') || null,
+                src: sourceId(img.src), currentSrc: sourceId(img.currentSrc),
+                connected: img.isConnected, skipped: shouldSkipImage(img),
+                clickExcluded: isExcludedImage(img),
+                complete: img.complete, natural: [img.naturalWidth, img.naturalHeight],
+                size: [Math.round(rect.width), Math.round(rect.height)],
+                inViewport: rect.width > 0 && rect.height > 0 && rect.bottom > 0 &&
+                    rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth,
+            };
+        }
+
+        function snapshot() {
+            const timeline = document.querySelector(timelineSelector);
+            const root = timeline || document;
+            return {
+                // Hash the route as well so SPA chat switches can be distinguished.
+                route: sourceId(location.origin + location.pathname),
+                timeline: timeline ? {
+                    node: nodeId(timeline), top: Math.round(timeline.scrollTop),
+                    height: timeline.scrollHeight, viewport: timeline.clientHeight,
+                    direction: getComputedStyle(timeline).flexDirection,
+                } : null,
+                turns: Array.from(root.querySelectorAll(turnSelector), (turn) => ({
+                    key: turnKey(turn), node: nodeId(turn),
+                    state: turn.querySelector('[data-talvt-turn-state]')?.getAttribute('data-talvt-turn-state') || null,
+                    images: turn.querySelectorAll('img').length,
+                })),
+                images: Array.from(root.querySelectorAll('img')).filter((img) => !overlay?.contains(img)).map(imageState),
+                gallery: {
+                    open: !!overlay, index: currentIndex, count: imgs.length,
+                    detached: imgs.filter((img) => !img.isConnected).map(nodeId),
+                    nodes: imgs.map(nodeId), selected: imageState(imgs[currentIndex]),
+                    displayed: imageState(overlay ? overlayImage : null),
+                },
+            };
+        }
+
+        function record(event, detail = {}) {
+            if (!running) return;
+            const state = snapshot();
+            const sameRoute = previous?.route === state.route;
+            const oldImages = new Map((sameRoute ? previous.images : []).map((img) => [img.node, img]));
+            const newImages = new Map(state.images.map((img) => [img.node, img]));
+            const oldTurns = new Set((sameRoute ? previous.turns : []).map((turn) => turn.key));
+            const newTurns = new Set(state.turns.map((turn) => turn.key));
+            const entry = {
+                sequence: ++sequence, time: new Date().toISOString(), event, ...detail,
+                changes: {
+                    routeChanged: !!previous && !sameRoute,
+                    turnsAdded: [...newTurns].filter((key) => !oldTurns.has(key)),
+                    turnsRemoved: [...oldTurns].filter((key) => !newTurns.has(key)),
+                    imagesAdded: state.images.filter((img) => !oldImages.has(img.node)).map((img) => img.node),
+                    imagesRemoved: [...oldImages.keys()].filter((id) => !newImages.has(id)),
+                    sourcesChanged: state.images.filter((img) => {
+                        const old = oldImages.get(img.node);
+                        return old && (old.src !== img.src || old.currentSrc !== img.currentSrc);
+                    }).map((img) => img.node),
+                },
+                ...state,
+            };
+            previous = state;
+            events.push(entry);
+            if (events.length > maxEvents) events.shift();
+            // Serialize now: DevTools otherwise shows mutable objects at inspection time.
+            console.log(prefix + ' ' + JSON.stringify(entry));
+            return entry;
+        }
+
+        function schedule(reason) {
+            if (!running) return;
+            pending.add(reason);
+            if (timer !== null) return;
+            // Throttle (not debounce) so continuous scrolling still produces samples.
+            timer = setTimeout(() => {
+                timer = null;
+                const reasons = [...pending];
+                pending.clear();
+                record('timeline-update', { reasons });
+            }, 250);
+        }
+
+        function relevant(node) {
+            return node.nodeType === 1 && !overlay?.contains(node) &&
+                (node.matches(`${timelineSelector}, ${turnSelector}, img`) ||
+                    !!node.querySelector(`${timelineSelector}, ${turnSelector}, img`));
+        }
+
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (overlay?.contains(mutation.target)) continue;
+                if (mutation.type === 'attributes' ||
+                    [...mutation.addedNodes, ...mutation.removedNodes].some(relevant)) {
+                    schedule('dom');
+                    break;
+                }
+            }
+        });
+        const onScroll = (event) => {
+            if (event.target === document || event.target.matches?.(timelineSelector)) schedule('scroll');
+        };
+        const onImageEvent = (event) => {
+            if (event.target.tagName !== 'IMG') return;
+            record('image-' + event.type, { image: imageState(event.target) });
+        };
+
+        const api = {
+            record,
+            snapshot: () => record('manual-snapshot'),
+            export: () => JSON.stringify({ schema: 1, maxEvents, totalEvents: sequence, events }, null, 2),
+            clear() { events.length = 0; previous = null; sequence = 0; },
+            start() {
+                if (running) return;
+                running = true;
+                observer.observe(document.body, {
+                    childList: true, subtree: true, attributes: true,
+                    attributeFilter: ['src', 'srcset', 'data-turn-key', 'data-talvt-turn-state'],
+                });
+                document.addEventListener('scroll', onScroll, true);
+                document.addEventListener('load', onImageEvent, true);
+                document.addEventListener('error', onImageEvent, true);
+                record('start');
+            },
+            stop() {
+                if (!running) return;
+                record('stop');
+                running = false;
+                observer.disconnect();
+                document.removeEventListener('scroll', onScroll, true);
+                document.removeEventListener('load', onImageEvent, true);
+                document.removeEventListener('error', onImageEvent, true);
+                clearTimeout(timer);
+                timer = null;
+                pending.clear();
+            },
+        };
+        window.__ivChatGPTDebug = api;
+        console.info(prefix + ' enabled. Export: copy(__ivChatGPTDebug.export()). Stop: __ivChatGPTDebug.stop()');
+        api.start();
+        return api;
+    }
+
+    // The timeline only mounts a small window of turns. Keep discovered images independent
+    // of those DOM nodes and own the blob URLs so unmounting cannot revoke our images.
+    function createChatGPTGallery() {
+        if (!isChatGPTHost()) return null;
+        const timelineSelector = '[data-app-action-timeline-scroll]';
+        const turnSelector = '[data-turn-key], [data-testid^="conversation-turn-"]';
+        const records = new Map();
+        const imageKeys = new WeakMap();
+        const turnPositions = new Map();
+        let turnOrder = [];
+        let conversation = null;
+        let generation = 0;
+        let bytes = 0;
+        let run = null;
+        let passive = newPassiveSession();
+        const maxBytes = 512 * 1024 * 1024;
+        const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const turnKey = (turn) => turn.getAttribute('data-turn-key') || turn.getAttribute('data-testid');
+        const timeline = () => document.querySelector(timelineSelector);
+        const conversationId = () => document.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
+            timeline()?.querySelector('[data-chatgpt-selection-conversation-id]')?.getAttribute('data-chatgpt-selection-conversation-id') ||
+            location.pathname.match(/\/c\/([^/]+)/)?.[1] || null;
+        const log = (event, detail) => ivChatGPTNavigationDebug?.record('scan-' + event, detail);
+
+        function newPassiveSession() {
+            return { passive: true, cancelled: false, controllers: new Set(), attempted: new WeakMap() };
+        }
+
+        function reset() {
+            if (run) { run.cancelled = true; run.restore = false; }
+            passive.cancelled = true;
+            for (const controller of passive.controllers) controller.abort();
+            passive = newPassiveSession();
+            generation++;
+            for (const record of records.values()) {
+                if (record.url) URL.revokeObjectURL(record.url);
+            }
+            records.clear();
+            turnOrder = [];
+            turnPositions.clear();
+            bytes = 0;
+            // Also release any previous gallery proxies held by the viewer.
+            if (overlay) clearOverlay();
+            imgs = [];
+            currentIndex = -1;
+        }
+
+        function syncConversation() {
+            const id = conversationId();
+            if (id !== conversation) {
+                reset();
+                conversation = id;
+            }
+            return id;
+        }
+
+        function mergeTurns(keys) {
+            // Prefer overlapping turn IDs. Manual jumps can visit disjoint windows in
+            // any order, so use their distance from the bottom when no neighbour is known.
+            for (let i = keys.length - 1; i >= 0; i--) {
+                const key = keys[i];
+                if (turnOrder.includes(key)) continue;
+                const next = keys.slice(i + 1).find((k) => turnOrder.includes(k));
+                const prev = keys.slice(0, i).reverse().find((k) => turnOrder.includes(k));
+                const position = turnPositions.get(key);
+                const before = turnOrder.findIndex((k) => turnPositions.get(k) < position);
+                const at = next ? turnOrder.indexOf(next) : prev ? turnOrder.indexOf(prev) + 1 :
+                    before >= 0 ? before : turnOrder.length;
+                turnOrder.splice(at, 0, key);
+            }
+        }
+
+        function mounted() {
+            const root = timeline();
+            if (!root) return [];
+            const turns = Array.from(root.querySelectorAll(turnSelector));
+            const top = root.getBoundingClientRect().top;
+            const distance = fromBottom(root);
+            for (const turn of turns) {
+                turnPositions.set(turnKey(turn), distance - (turn.getBoundingClientRect().top - top));
+            }
+            mergeTurns(turns.map(turnKey));
+            const result = [];
+            for (const turn of turns) {
+                const slots = new Map();
+                let order = 0;
+                for (const img of turn.querySelectorAll('img')) {
+                    const owner = img.closest('[data-chatgpt-search-message-ids], [data-message-id]');
+                    const message = owner?.getAttribute('data-chatgpt-search-message-ids') ||
+                        owner?.getAttribute('data-message-id') || turnKey(turn);
+                    const slot = slots.get(message) || 0;
+                    slots.set(message, slot + 1);
+                    if (shouldSkipImage(img)) continue;
+                    const key = JSON.stringify([turnKey(turn), message, slot]);
+                    imageKeys.set(img, key);
+                    result.push({ key, turn: turnKey(turn), order: order++, img });
+                }
+            }
+            return result;
+        }
+
+        async function preserve(item, session) {
+            let record = records.get(item.key);
+            if (!record) {
+                const image = document.createElement('img');
+                imageKeys.set(image, item.key);
+                record = { key: item.key, turn: item.turn, order: item.order, image, url: null, size: 0 };
+                records.set(item.key, record);
+            }
+            record.order = item.order;
+            const img = item.img;
+            const pixels = img.naturalWidth * img.naturalHeight;
+            if (record.pending || (record.url && record.pixels >= pixels)) return;
+            if (!img.complete || !pixels) return;
+            const src = img.currentSrc || img.src;
+            const attempt = item.key + src;
+            if (!src || (session.passive ? session.attempted.get(img) === src : session.attempted.has(attempt))) return;
+            if (session.passive) session.attempted.set(img, src);
+            else session.attempted.add(attempt);
+            const epoch = generation;
+            const controller = new AbortController();
+            session.controllers.add(controller);
+            record.pending = true;
+            let timeout;
+            try {
+                const blob = await Promise.race([
+                    (async () => {
+                        try {
+                            const response = await fetch(src, { signal: controller.signal });
+                            if (!response.ok) throw new Error('Image fetch failed');
+                            const fetched = await response.blob();
+                            if (fetched.size && fetched.type.startsWith('image/')) return fetched;
+                        } catch (e) {
+                            if (controller.signal.aborted) throw e;
+                        }
+                        // Some pages block fetch(blob:) with CSP but allow reading decoded pixels.
+                        if ((img.currentSrc || img.src) !== src) return null;
+                        return clipboardPngBlobFromImageElement(img);
+                    })(),
+                    new Promise((_, reject) => {
+                        timeout = setTimeout(() => { controller.abort(); reject(new Error('Image timed out')); }, 10000);
+                    }),
+                ]);
+                if (epoch !== generation || session.cancelled || conversationId() !== conversation) return;
+                if (!blob?.size) throw new Error('Image unavailable');
+                if (bytes - record.size + blob.size > maxBytes) {
+                    session.limit = true;
+                    session.cancelled = true;
+                    if (session.passive) showViewerToast('Image cache full for this chat', 4000);
+                    return;
+                }
+                const url = URL.createObjectURL(blob);
+                if (record.url) URL.revokeObjectURL(record.url);
+                bytes += blob.size - record.size;
+                Object.assign(record, { url, size: blob.size, pixels, failed: false });
+                record.image.src = url;
+                record.image.alt = 'Chat image';
+            } catch (e) {
+                if (epoch === generation && !session.cancelled) {
+                    record.failed = true;
+                    log('image-unavailable', { reason: e.name || 'Error' });
+                }
+            } finally {
+                clearTimeout(timeout);
+                session.controllers.delete(controller);
+                record.pending = false;
+            }
+        }
+
+        function images() {
+            if (!syncConversation() || !records.size) return null;
+            const current = mounted();
+            const available = new Map(current.map((item) => [item.key, item]));
+            for (const record of records.values()) {
+                if (record.url) available.set(record.key, { ...record, img: record.image });
+            }
+            const ranks = new Map(turnOrder.map((key, i) => [key, i]));
+            return [...available.values()].sort((a, b) =>
+                (ranks.get(a.turn) ?? Infinity) - (ranks.get(b.turn) ?? Infinity) || a.order - b.order,
+            ).map((item) => item.img);
+        }
+
+        function fromBottom(el) {
+            return getComputedStyle(el).flexDirection === 'column-reverse'
+                ? -el.scrollTop : el.scrollHeight - el.clientHeight - el.scrollTop;
+        }
+
+        function setFromBottom(el, distance) {
+            el.scrollTop = getComputedStyle(el).flexDirection === 'column-reverse'
+                ? -distance : el.scrollHeight - el.clientHeight - distance;
+        }
+
+        function active(session) {
+            return !session.cancelled && session.epoch === generation &&
+                session.id === conversationId() && session.root === timeline() && session.root.isConnected;
+        }
+
+        function signature(root) {
+            return JSON.stringify([
+                root.scrollHeight,
+                ...Array.from(root.querySelectorAll(turnSelector), turnKey),
+                ...Array.from(root.querySelectorAll('img'), (img) => [img.currentSrc || img.src, img.complete, img.naturalWidth]),
+            ]);
+        }
+
+        function updateProgress(session) {
+            const count = [...records.values()].filter((record) => record.url).length;
+            session.label.textContent = `Loading chat images… ${count} saved · Esc to cancel`;
+        }
+
+        async function settle(session, minWait = null) {
+            const start = performance.now();
+            let changed = start;
+            let previous = '';
+            while (active(session)) {
+                // Background tabs throttle timers and lazy rendering. Do not scan past unseen content.
+                if (document.hidden) { session.cancelled = true; break; }
+                const items = mounted();
+                for (const item of items) {
+                    session.seen.add(item.key);
+                    void preserve(item, session);
+                }
+                updateProgress(session);
+                const next = signature(session.root);
+                if (next !== previous) { previous = next; changed = performance.now(); }
+                const turns = Array.from(session.root.querySelectorAll(turnSelector));
+                const alreadyChecked = turns.length > 0 && turns.every((turn) =>
+                    session.checkedTurns.get(turn) === turnKey(turn));
+                const pending = items.some((item) => !item.img.complete || !item.img.naturalWidth || records.get(item.key)?.pending) ||
+                    !!session.root.querySelector('[aria-busy="true"], [role="progressbar"], [data-testid="generated-image-preview"]:not(:has(img))');
+                const now = performance.now();
+                // New/recycled turn nodes still get a loading window. Once inspected,
+                // moving within the same content only needs a brief render/scroll check.
+                const wait = minWait ?? (alreadyChecked ? 200 : 2500);
+                const quiet = alreadyChecked && minWait === null ? 200 : 1000;
+                if (now - start >= wait && now - changed >= quiet && !pending) {
+                    for (const turn of turns) session.checkedTurns.set(turn, turnKey(turn));
+                    return true;
+                }
+                if (now - start >= 12000) {
+                    session.timeouts++;
+                    log('section-timeout', { images: items.length });
+                    return false;
+                }
+                await pause(200);
+            }
+            return false;
+        }
+
+        function nextScanStep(session) {
+            const root = session.root;
+            const overlapStep = Math.max(100, root.clientHeight * 0.7);
+            const top = root.getBoundingClientRect().top + root.clientTop;
+            const turns = Array.from(root.querySelectorAll(turnSelector));
+            const rects = turns.map((turn) => turn.getBoundingClientRect());
+            let index = rects.findIndex((rect) => rect.top <= top + 1 && rect.bottom > top + 1);
+            let edge = top;
+            while (index >= 0) {
+                const turn = turns[index];
+                const rect = rects[index];
+                if (session.checkedTurns.get(turn) !== turnKey(turn) ||
+                    !turn.querySelector('[data-talvt-turn-state="complete"]') ||
+                    turn.querySelector('img, picture, [data-testid="generated-image-gallery"], ' +
+                        '[data-testid="generated-image-preview"], [data-image-transparency-backdrop-scope], ' +
+                        '[aria-busy="true"], [role="progressbar"], [data-virtualized-turn-content]') ||
+                    rect.bottom < edge - 32) break;
+                edge = rect.top;
+                index--;
+            }
+            // Jump only inside contiguous, mounted, inspected text. Keep an overlap
+            // before its older edge so the next unseen/image-bearing turn gets visited.
+            const step = Math.max(overlapStep, top - edge - root.clientHeight * 0.3);
+            if (step > overlapStep) log('text-skip', { pixels: Math.round(step) });
+            return step;
+        }
+
+        async function restorePosition(session) {
+            if (!session.restore || session.id !== conversationId() || session.root !== timeline()) return;
+            setFromBottom(session.root, session.savedDistance);
+            // Heights can change as the saved window remounts. Prefer its original turn anchor.
+            for (let i = 0; i < 10; i++) {
+                await pause(150);
+                if (!session.restore || session.id !== conversationId() || session.root !== timeline()) return;
+                const anchor = Array.from(session.root.querySelectorAll(turnSelector)).find((turn) => turnKey(turn) === session.anchor?.key);
+                if (anchor) session.root.scrollTop += anchor.getBoundingClientRect().top -
+                    session.root.getBoundingClientRect().top - session.anchor.offset;
+            }
+        }
+
+        async function scan() {
+            if (run) return;
+            const id = syncConversation();
+            const root = timeline();
+            if (!id || !root) { showViewerToast('Open a ChatGPT conversation first'); return; }
+            if (overlay) { hideFullscreen(); clearOverlay(); }
+            hideViewerHotkeysModal();
+            const top = root.getBoundingClientRect().top;
+            const anchor = Array.from(root.querySelectorAll(turnSelector)).find((turn) => turn.getBoundingClientRect().bottom > top);
+            const panel = document.createElement('div');
+            panel.id = 'iv-chatgpt-scan';
+            panel.setAttribute('role', 'status');
+            Object.assign(panel.style, {
+                position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+                zIndex: '2147483647', background: '#18181b', color: '#fafafa', padding: '12px 16px',
+                border: '1px solid #71717a', borderRadius: '10px', font: '14px system-ui',
+                display: 'flex', alignItems: 'center', gap: '16px',
+            });
+            const label = document.createElement('span');
+            const cancelButton = document.createElement('button');
+            cancelButton.textContent = 'Cancel';
+            cancelButton.type = 'button';
+            Object.assign(cancelButton.style, { padding: '6px 12px', borderRadius: '6px', background: '#3f3f46', color: 'white', cursor: 'pointer' });
+            panel.append(label, cancelButton);
+            document.body.appendChild(panel);
+            const session = {
+                root, id, epoch: generation, label, cancelled: false, restore: true, timeouts: 0,
+                controllers: new Set(), attempted: new Set(), seen: new Set(),
+                checkedTurns: new WeakMap(),
+                savedDistance: fromBottom(root),
+                anchor: anchor ? { key: turnKey(anchor), offset: anchor.getBoundingClientRect().top - top } : null,
+            };
+            const previousOrder = turnOrder;
+            turnOrder = [];
+            run = session;
+            cancelButton.addEventListener('click', () => cancel());
+            const onManualScroll = () => cancel(false);
+            root.addEventListener('wheel', onManualScroll, { passive: true });
+            root.addEventListener('touchstart', onManualScroll, { passive: true });
+            const oldBehavior = root.style.getPropertyValue('scroll-behavior');
+            const oldPriority = root.style.getPropertyPriority('scroll-behavior');
+            root.style.setProperty('scroll-behavior', 'auto', 'important');
+            let completed = false;
+            log('start', { savedDistance: session.savedDistance, anchor: session.anchor });
+            try {
+                setFromBottom(root, 0);
+                const started = performance.now();
+                while (active(session)) {
+                    await settle(session);
+                    if (!active(session)) break;
+                    if (performance.now() - started > 20 * 60 * 1000) break;
+                    const distance = fromBottom(root);
+                    const extent = root.scrollHeight - root.clientHeight;
+                    if (distance >= extent - 2) {
+                        // Reaching the current top can trigger another history page. Give it
+                        // another quiet period and require unchanged turns and scroll extent.
+                        const before = signature(root);
+                        await settle(session, 4000);
+                        if (!active(session)) break;
+                        if (before === signature(root) && fromBottom(root) >= root.scrollHeight - root.clientHeight - 2) {
+                            completed = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    setFromBottom(root, distance + nextScanStep(session));
+                }
+            } catch (e) {
+                log('error', { reason: e.name || 'Error' });
+            } finally {
+                session.cancelled = true;
+                for (const controller of session.controllers) controller.abort();
+                if (session.epoch === generation) {
+                    turnOrder = [...previousOrder.filter((key) => !turnOrder.includes(key)), ...turnOrder];
+                }
+                // A full rescan also drops images removed by edits or a branch change.
+                if (completed && !session.timeouts) {
+                    for (const [key, record] of records) {
+                        if (session.seen.has(key)) continue;
+                        if (record.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
+                        records.delete(key);
+                    }
+                }
+                label.textContent = 'Restoring your position…';
+                await restorePosition(session);
+                root.style.setProperty('scroll-behavior', oldBehavior, oldPriority);
+                root.removeEventListener('wheel', onManualScroll);
+                root.removeEventListener('touchstart', onManualScroll);
+                panel.remove();
+                run = null;
+                if (session.id === conversationId()) {
+                    const count = [...records.values()].filter((record) => record.url).length;
+                    const failed = [...records.values()].filter((record) => record.failed && !record.url).length;
+                    const status = session.limit ? 'Memory limit reached' : completed ? 'Scan finished' : 'Scan stopped';
+                    showViewerToast(`${status}: ${count} images saved${session.timeouts || failed ? ' · Some images may be missing; run again to retry' : ''}`, 6000);
+                    log('finish', { completed, count, failed, timeouts: session.timeouts, bytes });
+                }
+                syncConversation();
+                captureMounted();
+            }
+        }
+
+        function cancel(restore = true) {
+            if (!run) return;
+            run.cancelled = true;
+            run.restore = restore;
+            for (const controller of run.controllers) controller.abort();
+        }
+
+        let observedRoot = null;
+        let captureTimer = null;
+        const observer = new MutationObserver((mutations) => {
+            if (mutations.some((mutation) => mutation.type === 'childList' ||
+                mutation.target.tagName === 'IMG' || mutation.attributeName === 'data-turn-key')) {
+                scheduleCapture();
+            }
+        });
+
+        function observeTimeline() {
+            const root = timeline();
+            if (root === observedRoot) return false;
+            observer.disconnect();
+            observedRoot = root;
+            if (root) observer.observe(root, {
+                childList: true, subtree: true, attributes: true,
+                attributeFilter: ['src', 'srcset', 'style', 'class', 'data-turn-key'],
+            });
+            return true;
+        }
+
+        function captureMounted() {
+            const id = syncConversation();
+            observeTimeline();
+            if (!id || passive.cancelled || (run && !run.cancelled)) return;
+            for (const item of mounted()) void preserve(item, passive);
+        }
+
+        function scheduleCapture() {
+            if (captureTimer !== null) return;
+            captureTimer = setTimeout(() => { captureTimer = null; captureMounted(); }, 50);
+        }
+
+        document.addEventListener('load', (event) => {
+            // Start copying immediately at load time, before a fast scroll can unmount
+            // the turn. Overlay images live outside the timeline and are ignored.
+            if (event.target.tagName === 'IMG' && event.target.closest(timelineSelector)) captureMounted();
+        }, true);
+        document.addEventListener('scroll', (event) => {
+            if (event.target.matches?.(timelineSelector)) scheduleCapture();
+        }, true);
+        // Rebind after SPA navigation or replacement of the timeline, even without images.
+        setInterval(() => {
+            const previous = conversation;
+            syncConversation();
+            if (observeTimeline() || previous !== conversation) captureMounted();
+        }, 1000);
+        window.addEventListener('pagehide', () => {
+            reset(); conversation = null;
+            observer.disconnect(); observedRoot = null;
+            clearTimeout(captureTimer); captureTimer = null;
+        });
+        window.addEventListener('pageshow', scheduleCapture);
+        captureMounted();
+        return {
+            scan, cancel, images,
+            get scanning() { return !!run; },
+            key: (img) => imageKeys.get(img),
+            original(img) {
+                const key = imageKeys.get(img);
+                return mounted().find((item) => item.key === key)?.img || null;
+            },
+        };
+    }
+
     // ChatGPT scrolls the conversation in a column-reverse container, while
     // the browser's native Cmd+Arrow shortcuts still target the document.
     // Restore the usual macOS jump-to-start/end behavior for the timeline.
@@ -806,6 +1456,7 @@
 
     function clearOverlay() {
         if (!overlay) return;
+        ivChatGPTNavigationDebug?.record('overlay-close');
         ivLogFullscreenExit('clearOverlay');
         stopOverlayArrowScroll();
         stopCursorAutoHide();
@@ -878,7 +1529,13 @@
     }
 
     function scrollToImage() {
-        const imgEl = imgs[currentIndex];
+        const selected = imgs[currentIndex];
+        const imgEl = selected?.isConnected ? selected : ivChatGPTGallery?.original(selected);
+        if (!imgEl) {
+            showViewerToast('This image’s chat turn is not currently loaded');
+            return;
+        }
+        ivChatGPTNavigationDebug?.record('scroll-to-image');
         hideFullscreen();
         setTimeout(() => imgEl?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
     }
@@ -1134,11 +1791,13 @@
     }
 
     function collectNavigableImages() {
+        const cached = ivChatGPTGallery?.images();
+        if (cached) return cached;
         const allImgs = Array.from(document.querySelectorAll('img'));
         const seen = new Set();
         const list = [];
         for (const imgEl of allImgs) {
-            if (shouldSkipImage(imgEl)) continue;
+            if (overlay?.contains(imgEl) || shouldSkipImage(imgEl)) continue;
             const src = imgEl.src;
             if (!src || seen.has(src)) continue;
             seen.add(src);
@@ -1157,7 +1816,22 @@
     }
 
     function navigate(delta) {
+        if (overlay && ivChatGPTGallery) {
+            const selected = imgs[currentIndex];
+            const key = ivChatGPTGallery.key(selected);
+            const list = ivChatGPTGallery.images();
+            const index = list?.findIndex((img) => key
+                ? ivChatGPTGallery.key(img) === key : img.src === selected?.src);
+            if (index >= 0) {
+                saveOverlayNativeScrollForCurrent();
+                imgs = list;
+                currentIndex = index;
+            }
+        }
         const next = currentIndex + delta;
+        ivChatGPTNavigationDebug?.record('navigate', {
+            delta, next, blocked: next < 0 || next >= imgs.length,
+        });
         if (next < 0 || next >= imgs.length) return;
         saveOverlayNativeScrollForCurrent();
         currentIndex = next;
@@ -1166,15 +1840,18 @@
 
     function navigateToRandomImage() {
         const list = collectNavigableImages();
+        ivChatGPTNavigationDebug?.record('random', { collected: list.length });
         if (!list.length) return false;
 
         if (overlay) {
-            imgs = list;
+            const currentKey = ivChatGPTGallery?.key(imgs[currentIndex]);
             const currentSrc = overlayImage?.src || imgs[currentIndex]?.src;
-            currentIndex = currentSrc ? imgs.findIndex((imgEl) => imgEl.src === currentSrc) : -1;
+            saveOverlayNativeScrollForCurrent();
+            imgs = list;
+            currentIndex = imgs.findIndex((imgEl) => currentKey
+                ? ivChatGPTGallery.key(imgEl) === currentKey : imgEl.src === currentSrc);
             const next = pickRandomIndex(imgs.length, currentIndex);
             if (next < 0) return false;
-            saveOverlayNativeScrollForCurrent();
             currentIndex = next;
             displayImageInOverlay(imgs[currentIndex]);
             return true;
@@ -1187,13 +1864,15 @@
     }
 
     function showFullscreen(img) {
+        if (ivChatGPTGallery?.scanning) return;
         if (!img || shouldSkipImage(img)) return;
         ivContextMenuInFullscreen = false;
         
         imgs = collectNavigableImages();
         
-        // Find index by src, not by element reference
-        currentIndex = imgs.findIndex(imgEl => imgEl.src === img.src);
+        // Cached ChatGPT images have their own URLs; match their stable message/slot key.
+        const key = ivChatGPTGallery?.key(img);
+        currentIndex = imgs.findIndex(imgEl => key ? ivChatGPTGallery.key(imgEl) === key : imgEl.src === img.src);
         if (currentIndex < 0) currentIndex = 0;
 
         ivLogFullscreenExit('showFullscreen');
@@ -1221,7 +1900,7 @@
             zIndex: 2147483647, cursor: 'zoom-out'
         });
 
-        displayImageInOverlay(img);
+        displayImageInOverlay(imgs[currentIndex] || img);
         applyOverlayImageFitMode();
 
         // Navigation buttons
@@ -1258,6 +1937,7 @@
         // Fixed navigation controls can otherwise intercept trackpad/wheel scrolling.
         overlay.addEventListener('wheel', onOverlayWheel, { capture: true, passive: false });
         document.body.appendChild(overlay);
+        ivChatGPTNavigationDebug?.record('overlay-open');
         startCursorAutoHide(() => !!overlay, {
             onShow: () => {
                 if (overlay) overlay.style.cursor = overlayCursorWhenVisible();
@@ -1688,6 +2368,18 @@
                 row.appendChild(descEl);
                 panel.appendChild(row);
             }
+        }
+
+        if (ivChatGPTGallery) {
+            const scanButton = document.createElement('button');
+            scanButton.type = 'button';
+            scanButton.textContent = 'Load all chat images (Shift+L)';
+            Object.assign(scanButton.style, {
+                marginTop: '16px', padding: '10px 14px', borderRadius: '8px',
+                background: '#3f3f46', color: '#fafafa', cursor: 'pointer', width: '100%',
+            });
+            scanButton.addEventListener('click', () => { hideViewerHotkeysModal(); void ivChatGPTGallery.scan(); });
+            panel.appendChild(scanButton);
         }
 
         root.addEventListener('mousedown', (e) => {
@@ -4183,7 +4875,24 @@
     function handleViewerKeydown(e) {
         if (viewerHotkeysModalBlocksKeydown(e)) return;
         if (e.isComposing || e.keyCode === 229) return;
+
+        if (ivChatGPTGallery?.scanning) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                ivChatGPTGallery.cancel();
+            } else if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
+                ivChatGPTGallery.cancel(false);
+            }
+            return;
+        }
         if (!overlay && isKeyboardTypingTarget(e.target)) return;
+        if (ivChatGPTGallery && e.code === 'KeyL' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            void ivChatGPTGallery.scan();
+            return;
+        }
 
         if (e.code === 'KeyH' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (!isKeyboardTypingTarget(e.target)) {
@@ -4415,6 +5124,8 @@
         handleViewerKeydown(e);
         if (!e.cancelBubble && !e.isComposing && e.keyCode !== 229) handleOverlayKeydown(e);
     };
+    ivChatGPTNavigationDebug = createChatGPTNavigationDebug();
+    ivChatGPTGallery = createChatGPTGallery();
     } // End of init()
     
     // Run init when DOM is ready
