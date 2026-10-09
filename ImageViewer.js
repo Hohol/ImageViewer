@@ -656,6 +656,8 @@
         const records = new Map();
         const imageKeys = new WeakMap();
         const turnPositions = new Map();
+        // Stable image keys at confirmed ends of this conversation's gallery.
+        const knownEnds = new Map();
         let turnOrder = [];
         let conversation = null;
         let generation = 0;
@@ -685,6 +687,7 @@
                 if (record.url) URL.revokeObjectURL(record.url);
             }
             records.clear();
+            knownEnds.clear();
             turnOrder = [];
             turnPositions.clear();
             bytes = 0;
@@ -709,6 +712,7 @@
             for (let i = keys.length - 1; i >= 0; i--) {
                 const key = keys[i];
                 if (turnOrder.includes(key)) continue;
+                knownEnds.clear();
                 const next = keys.slice(i + 1).find((k) => turnOrder.includes(k));
                 const prev = keys.slice(0, i).reverse().find((k) => turnOrder.includes(k));
                 const position = turnPositions.get(key);
@@ -741,6 +745,8 @@
                     slots.set(message, slot + 1);
                     if (shouldSkipImage(img)) continue;
                     const key = JSON.stringify([turnKey(turn), message, slot]);
+                    // New turns/images can extend a previously complete conversation.
+                    if (!records.has(key)) knownEnds.clear();
                     imageKeys.set(img, key);
                     result.push({ key, turn: turnKey(turn), order: order++, img });
                 }
@@ -956,6 +962,7 @@
                 checkedTurns: new WeakMap(),
             };
             const previousOrder = turnOrder;
+            knownEnds.clear();
             turnOrder = [];
             run = session;
             cancelButton.addEventListener('click', () => cancel());
@@ -1005,6 +1012,13 @@
                         if (record.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
                         records.delete(key);
                     }
+                    if ([...session.seen].every((key) => records.get(key)?.url)) {
+                        const list = images() || [];
+                        if (list.length) {
+                            knownEnds.set(-1, imageKeys.get(list[0]));
+                            knownEnds.set(1, imageKeys.get(list[list.length - 1]));
+                        }
+                    }
                 }
                 // Leave completed scans at the oldest turn, or cancelled scans where they stopped.
                 root.style.setProperty('scroll-behavior', oldBehavior, oldPriority);
@@ -1038,6 +1052,7 @@
             const key = imageKeys.get(selected);
             if (!id || !root || !key || !isCurrent()) return null;
             mounted();
+            if (knownEnds.get(direction) === key) return null;
             const record = records.get(key);
             const position = turnPositions.get(record?.turn);
             if (position === undefined) return null;
@@ -1055,7 +1070,8 @@
             root.addEventListener('wheel', onManualScroll, { passive: true });
             root.addEventListener('touchstart', onManualScroll, { passive: true });
             const label = direction < 0 ? 'earlier' : 'later';
-            showViewerToast(`Looking for ${label} images… · Esc to close`, 30000);
+            const loadingMessage = `Looking for ${label} images… · Esc to close`;
+            let loadingShown = false;
             log('navigation-start', { direction });
             let found = false;
             let reachedEnd = false;
@@ -1095,6 +1111,10 @@
                         if (before === signature(root) && atEnd()) { reachedEnd = true; break; }
                         continue;
                     }
+                    if (!loadingShown) {
+                        showViewerToast(loadingMessage, 30000);
+                        loadingShown = true;
+                    }
                     setFromBottom(root, distance - direction * nextScanStep(session, direction));
                 }
             } catch (e) {
@@ -1109,10 +1129,13 @@
                 if (run === session) run = null;
                 finish();
                 if (isCurrent() && session.id === conversationId()) {
+                    const confirmedEnd = reachedEnd && !cancelled && !session.timeouts && !session.limit &&
+                        [...session.seen].every((seenKey) => records.get(seenKey)?.url);
                     if (found) showViewerToast('Image loaded', 1000);
-                    else showViewerToast(reachedEnd && !session.timeouts && !session.limit
-                        ? `No ${label} images found`
-                        : `Image search ${cancelled ? 'stopped' : 'incomplete'} · Press the arrow again to retry`, 4000);
+                    else if (confirmedEnd) {
+                        knownEnds.set(direction, key);
+                        if (loadingShown) hideViewerToast(loadingMessage);
+                    } else showViewerToast(`Image search ${cancelled ? 'stopped' : 'incomplete'} · Press the arrow again to retry`, 4000);
                 }
                 log('navigation-finish', { direction, found, reachedEnd, timeouts: session.timeouts });
                 captureMounted();
@@ -2279,6 +2302,13 @@
 
     let viewerToastEl = null;
     let viewerToastHideTimer = null;
+
+    function hideViewerToast(message) {
+        if (!viewerToastEl || viewerToastEl.textContent !== message) return;
+        clearTimeout(viewerToastHideTimer);
+        viewerToastEl.style.opacity = '0';
+        try { viewerToastEl.hidePopover(); } catch (e) {}
+    }
 
     function showViewerToast(message, holdMs = 2000) {
         if (!viewerToastEl) {
