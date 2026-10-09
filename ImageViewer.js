@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.32
+// @version      2.33
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -778,7 +778,9 @@
         if (img.closest('div.flex.flex-col.gap-2')) {
             const grokOk = isGrokHost() && isGrokOptInImage(img);
             const geminiOk = isGeminiHost() && isGeminiOptInImage(img);
-            if (!grokOk && !geminiOk) return true;
+            // Fresh ChatGPT results use this layout too; allow their explicit preview button.
+            const chatgptOk = isChatGPTHost() && !!img.closest('button[data-testid="generated-image-preview"]');
+            if (!grokOk && !geminiOk && !chatgptOk) return true;
         }
         // Skip thumbnail images in Favorites button
         if (img.closest('button[aria-label="Favorites"]')) return true;
