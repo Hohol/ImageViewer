@@ -21,6 +21,13 @@
 (function() {
     'use strict';
 
+    // Reserve capture priority at document-start, before Grok's type-to-focus
+    // listener. DOM-dependent handlers are connected only after init completes.
+    let viewerKeydownHandler = null;
+    window.addEventListener('keydown', (e) => {
+        if (viewerKeydownHandler) viewerKeydownHandler(e);
+    }, true);
+
     // Wait for DOM to be ready before checking
     function init() {
         // Don't run on pages that are just a single image or video (Open in New Tab)
@@ -721,6 +728,10 @@
     // Grok: only main chat generated images (opt-in), not thumbnails / chrome / etc.
     function isGrokOptInImage(img) {
         if (img.closest('[class*="group/grok-image"]')) return true;
+        // Imagine lightbox: the grid-position classes now live on a wrapper,
+        // while the hero image is nested inside the explicit media frame.
+        if (img.closest('[data-lightbox-media] [data-media-frame]') &&
+            !img.closest('[data-filmstrip-item]')) return true;
         const grid = img.closest('div.grid');
         if (!grid || !img.classList.contains('col-start-1') || !img.classList.contains('row-start-1')) {
             return false;
@@ -1308,8 +1319,8 @@
         void openImageInNewTabInline(img);
     }, true);
 
-    // Keyboard controls (capture: must run before bubble and before focused textarea consumes keys)
-    document.addEventListener('keydown', e => {
+    // Routed through the early window capture listener, ahead of site shortcuts.
+    function handleOverlayKeydown(e) {
         if (viewerHotkeysModalBlocksKeydown(e)) return;
         if (!overlay) return;
         if (e.key === 'Escape') {
@@ -1365,7 +1376,7 @@
             e.stopImmediatePropagation();
             navigate(-1);
         }
-    }, true);
+    }
 
     document.addEventListener('keyup', e => {
         if (!overlay) return;
@@ -4171,6 +4182,8 @@
     // Keyboard shortcuts for the viewer: video controls, image fullscreen (F), overlay vs video routing
     function handleViewerKeydown(e) {
         if (viewerHotkeysModalBlocksKeydown(e)) return;
+        if (e.isComposing || e.keyCode === 229) return;
+        if (!overlay && isKeyboardTypingTarget(e.target)) return;
 
         if (e.code === 'KeyH' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (!isKeyboardTypingTarget(e.target)) {
@@ -4398,9 +4411,10 @@
         }
     }
     
-    // Listen on both window and document in capture phase
-    window.addEventListener('keydown', handleViewerKeydown, true);
-    document.addEventListener('keydown', handleViewerKeydown, true);
+    viewerKeydownHandler = (e) => {
+        handleViewerKeydown(e);
+        if (!e.cancelBubble && !e.isComposing && e.keyCode !== 229) handleOverlayKeydown(e);
+    };
     } // End of init()
     
     // Run init when DOM is ready
