@@ -1,5 +1,5 @@
 (async () => {
-  // Mix accepted generated results with every formerly click-only exclusion.
+  // Mix generated results with excluded UI images and ChatGPT search cards.
   decorateImage = (turn, img) => {
     const index = Number(turn.dataset.index);
     const preview = img.parentElement;
@@ -14,25 +14,40 @@
     if (index === 6) img.alt = 'User';
     // The generated-image exception inside this generic layout must still pass.
     if (index === 7) turn.classList.add('flex', 'flex-col', 'gap-2');
+    if (index === 8) {
+      const card = document.createElement('div');
+      card.dataset.dComponent = 'image';
+      card.className = 'group/search-image';
+      const overlay = document.createElement('div');
+      overlay.innerHTML = '<button data-d-component="pressable" aria-label="Open Sample article" type="button"></button>';
+      preview.replaceWith(card);
+      card.append(img, overlay);
+    }
   };
   const gallery = await createGallery();
   const keys = () => (gallery.images() || []).map(img => JSON.parse(gallery.key(img))[0]);
-  setup({ id: 'excluded-scan', count: 9, lazy: 0 });
+  setup({ id: 'excluded-scan', count: 10, lazy: 0 });
   await gallery.scan();
-  check(keys().join(',') === 'turn-0,turn-7,turn-8', 'scan caches only eligible original images');
+  check(keys().join(',') === 'turn-0,turn-7,turn-9', 'scan caches only eligible original images');
   clearTurns();
   await sleep(80);
-  check(keys().join(',') === 'turn-0,turn-7,turn-8', 'eligible cached images survive losing their DOM ancestors');
+  check(keys().join(',') === 'turn-0,turn-7,turn-9', 'eligible cached images survive losing their DOM ancestors');
   await Promise.all(gallery.images().map(img => img.decode()));
   check(true, 'eligible cached blob copies remain usable');
 
-  setup({ id: 'excluded-navigation', count: 9, start: 2400, lazy: 0 });
+  setup({ id: 'excluded-navigation', count: 10, start: 2700, lazy: 0 });
   await sleep(150);
   check(keys().join(',') === 'turn-0', 'passive capture excludes the mounted Favorites thumbnail');
   const first = gallery.images()[0];
   const found = await gallery.findNext(first, 1, () => true);
   check(found && JSON.parse(gallery.key(found.list[found.index]))[0] === 'turn-7',
     'directional lookup skips excluded images across unloaded turns');
-  check(keys().every(key => ['turn-0', 'turn-7', 'turn-8'].includes(key)),
+  const next = await gallery.findNext(found.list[found.index], 1, () => true);
+  check(next && JSON.parse(gallery.key(next.list[next.index]))[0] === 'turn-9',
+    'directional lookup skips a search-image card between generated images');
+  check(keys().every(key => ['turn-0', 'turn-7', 'turn-9'].includes(key)),
     'navigation cannot introduce excluded images into the cache');
+  setup({ id: 'excluded-search-card-passive', count: 10, lazy: 0 });
+  await sleep(150);
+  check(keys().join(',') === 'turn-9', 'passive capture excludes search-card thumbnails');
 })().then(() => finish()).catch(finish);

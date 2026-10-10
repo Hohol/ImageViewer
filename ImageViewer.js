@@ -1607,6 +1607,8 @@
         if (isGrokHost() && !isGrokOptInImage(img)) return true;
         if (isGeminiHost() && !isGeminiOptInImage(img)) return true;
         if (isChatGPTProfileImage(img)) return true;
+        // ChatGPT web-search cards place the image beside an overlay Open button.
+        if (isChatGPTHost() && img.closest('[data-d-component="image"][class~="group/search-image"]')) return true;
         const alt = img.getAttribute('alt');
         // Skip avatars: ChatGPT (alt="User") and Grok (alt="pfp")
         if (alt === 'User' || alt === 'pfp') return true;

@@ -42,6 +42,7 @@ belongs in `support/`.
 | --- | --- |
 | Shared viewer navigation | Partial: cached navigation, ChatGPT search handoff, repeated keys, stale-result cancellation, basic non-ChatGPT fallback |
 | ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries, edited branches, long text spans |
+| ChatGPT search-image cards | Excluded from clicks, navigation, and gallery capture; generated images and generic image/button components stay eligible |
 | ChatGPT navigation diagnostics | Detached images, turn changes, URL redaction, bounded logs, listener cleanup |
 | Shared image eligibility | Common exclusions and ChatGPT generated-image exceptions agree for clicking and navigation |
 | Gemini integration | Inline generated images, lightbox images, source/markup eligibility, upload-preview exclusions |
@@ -89,7 +90,8 @@ The ChatGPT gallery suites are under `chatgpt/gallery/`:
 | `long-text` | Scan and navigation skip large text spans while retaining sparse images |
 | `eligibility` | Real image exclusions during scans, passive capture, and lookup through unloaded turns |
 
-The `shared/viewer/image-eligibility`, `gemini/image-eligibility`, and
+The `chatgpt/search-image-eligibility`, `shared/viewer/image-eligibility`,
+`gemini/image-eligibility`, and
 `grok/image-eligibility` suites compare the actual filter, click targeting, and
 navigation collection on synthetic DOM layouts. Their fixture blocks external
 image requests; CDN URLs are used only to exercise source-eligibility rules.
