@@ -658,6 +658,9 @@
         const turnPositions = new Map();
         // Stable image keys at confirmed ends of this conversation's gallery.
         const knownEnds = new Map();
+        let discardedTurns = new WeakMap();
+        let discardedImages = new WeakMap();
+        let editingTurn = null;
         let turnOrder = [];
         let conversation = null;
         let generation = 0;
@@ -678,6 +681,9 @@
         }
 
         function reset() {
+            editingTurn = null;
+            discardedTurns = new WeakMap();
+            discardedImages = new WeakMap();
             if (run) run.cancelled = true;
             passive.cancelled = true;
             for (const controller of passive.controllers) controller.abort();
@@ -726,7 +732,8 @@
         function mounted() {
             const root = timeline();
             if (!root) return [];
-            const turns = Array.from(root.querySelectorAll(turnSelector));
+            const turns = Array.from(root.querySelectorAll(turnSelector)).filter((turn) =>
+                discardedTurns.get(turn) !== turnKey(turn));
             const top = root.getBoundingClientRect().top;
             const distance = fromBottom(root);
             for (const turn of turns) {
@@ -745,6 +752,7 @@
                     slots.set(message, slot + 1);
                     if (shouldSkipImage(img)) continue;
                     const key = JSON.stringify([turnKey(turn), message, slot]);
+                    if (discardedImages.get(img) === key) continue;
                     // New turns/images can extend a previously complete conversation.
                     if (!records.has(key)) knownEnds.clear();
                     imageKeys.set(img, key);
@@ -753,6 +761,85 @@
             }
             return result;
         }
+
+        function rememberEditedTurn(turn) {
+            if (!turn || !timeline()?.contains(turn) || !syncConversation()) return;
+            mounted();
+            editingTurn = { key: turnKey(turn), id: conversation };
+        }
+
+        function discardEditedBranch() {
+            const edit = editingTurn;
+            editingTurn = null;
+            if (!edit || edit.id !== syncConversation()) return;
+            const items = mounted();
+            const order = run?.previousOrder?.includes(edit.key) ? run.previousOrder : turnOrder;
+            const index = order.indexOf(edit.key);
+            if (index < 0) return;
+            const removed = new Set(order.slice(index));
+            const currentTurnIndex = turnOrder.indexOf(edit.key);
+            if (currentTurnIndex >= 0) for (const key of turnOrder.slice(currentTurnIndex)) removed.add(key);
+            // Old DOM can remain mounted briefly after Send. Ignore those nodes until
+            // they are replaced, while allowing new message IDs in a reused edit turn.
+            for (const item of items) {
+                if (removed.has(item.turn)) discardedImages.set(item.img, item.key);
+            }
+            for (const turn of timeline()?.querySelectorAll(turnSelector) || []) {
+                const key = turnKey(turn);
+                if (removed.has(key) && key !== edit.key) discardedTurns.set(turn, key);
+            }
+            cancel();
+            passive.cancelled = true;
+            for (const controller of passive.controllers) controller.abort();
+            passive = newPassiveSession();
+            generation++;
+            let count = 0;
+            for (const [key, record] of records) {
+                if (!removed.has(record.turn)) continue;
+                if (record.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
+                records.delete(key);
+                count++;
+            }
+            const retained = turnOrder.filter((key) => !removed.has(key));
+            turnOrder = order.filter((key) => !removed.has(key));
+            mergeTurns(retained);
+            for (const key of removed) turnPositions.delete(key);
+            knownEnds.clear();
+            if (overlay) clearOverlay();
+            imgs = [];
+            currentIndex = -1;
+            log('branch-discarded', { turn: edit.key, turns: removed.size, images: count });
+            scheduleCapture();
+        }
+
+        const editInputSelector = 'textarea, [contenteditable="true"]';
+        function isEditingTurn(turn) {
+            return editingTurn && editingTurn.id === conversationId() && turn?.isConnected &&
+                turnKey(turn) === editingTurn.key && !!turn.querySelector(editInputSelector);
+        }
+        document.addEventListener('click', (event) => {
+            const button = event.target.closest?.('button');
+            if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+            const turn = button.closest(turnSelector);
+            if (button.getAttribute('aria-label') === 'Edit message') {
+                rememberEditedTurn(turn);
+                return;
+            }
+            if (!isEditingTurn(turn)) return;
+            const labels = [button.getAttribute('aria-label') || '', button.textContent].map((label) => label.trim());
+            if (labels.some((label) => /^cancel$/i.test(label))) { editingTurn = null; return; }
+            if (button.type === 'submit' || labels.some((label) => /^(send|submit|save(?: changes|\s*(?:&|and)\s*submit)?)$/i.test(label))) {
+                discardEditedBranch();
+            }
+        }, true);
+        document.addEventListener('focusin', (event) => {
+            if (!event.target.matches?.(editInputSelector) ||
+                !event.target.closest('[data-chatgpt-search-unit-key$=":user"], [data-message-author-role="user"]')) return;
+            rememberEditedTurn(event.target.closest(turnSelector));
+        });
+        document.addEventListener('submit', (event) => {
+            if (isEditingTurn(event.target.closest?.(turnSelector))) discardEditedBranch();
+        }, true);
 
         async function preserve(item, session) {
             let record = records.get(item.key);
@@ -962,6 +1049,7 @@
                 checkedTurns: new WeakMap(),
             };
             const previousOrder = turnOrder;
+            session.previousOrder = previousOrder;
             knownEnds.clear();
             turnOrder = [];
             run = session;
