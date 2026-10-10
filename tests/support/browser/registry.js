@@ -8,6 +8,11 @@ const browserSuites = ['scan', 'manual', 'navigation', 'boundaries', 'branches',
 
 browserSuites.push(
   {
+    id: 'chatgpt/svg-image-eligibility',
+    page: '/shared/viewer/eligibility/fixture.html',
+    script: '/sites/chatgpt/svg-image-eligibility.browser.js',
+  },
+  {
     id: 'chatgpt/search-image-eligibility',
     page: '/shared/viewer/eligibility/fixture.html',
     script: '/sites/chatgpt/search-image-eligibility.browser.js',
