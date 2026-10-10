@@ -1,0 +1,6 @@
+body { font: 14px system-ui; margin: 16px; }
+iframe { width: 100%; height: 580px; border: 1px solid #888; }
+pre { white-space: pre-wrap; }
+#results { height: 140px; overflow: auto; }
+[data-status="failed"] { color: #b32020; }
+[data-status="passed"] { color: #15702d; }
