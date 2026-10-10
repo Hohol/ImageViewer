@@ -1045,8 +1045,7 @@
         }
 
         async function findNext(selected, direction, isCurrent) {
-            if (run?.navigation) { cancel(); await run.done; }
-            if (run || !isCurrent()) return null;
+            if ((run && !run.navigation) || !isCurrent()) return null;
             const id = syncConversation();
             const root = timeline();
             const key = imageKeys.get(selected);
@@ -1056,6 +1055,17 @@
             const record = records.get(key);
             const position = turnPositions.get(record?.turn);
             if (position === undefined) return null;
+            const label = direction < 0 ? 'earlier' : 'later';
+            const loadingMessage = `Looking for ${label} images… · Esc to close`;
+            // Unknown boundaries need immediate feedback, including while an older
+            // search is winding down. Confirmed ends have already returned above.
+            showViewerToast(loadingMessage, 30000);
+            if (run?.navigation) { cancel(); await run.done; }
+            if (!isCurrent()) return null;
+            if (run || id !== conversationId() || root !== timeline()) {
+                hideViewerToast(loadingMessage);
+                return null;
+            }
             let finish;
             const session = {
                 navigation: true, root, id, epoch: generation, cancelled: false, timeouts: 0,
@@ -1069,9 +1079,6 @@
             const onManualScroll = () => cancel();
             root.addEventListener('wheel', onManualScroll, { passive: true });
             root.addEventListener('touchstart', onManualScroll, { passive: true });
-            const label = direction < 0 ? 'earlier' : 'later';
-            const loadingMessage = `Looking for ${label} images… · Esc to close`;
-            let loadingShown = false;
             log('navigation-start', { direction });
             let found = false;
             let reachedEnd = false;
@@ -1111,10 +1118,6 @@
                         if (before === signature(root) && atEnd()) { reachedEnd = true; break; }
                         continue;
                     }
-                    if (!loadingShown) {
-                        showViewerToast(loadingMessage, 30000);
-                        loadingShown = true;
-                    }
                     setFromBottom(root, distance - direction * nextScanStep(session, direction));
                 }
             } catch (e) {
@@ -1131,10 +1134,10 @@
                 if (isCurrent() && session.id === conversationId()) {
                     const confirmedEnd = reachedEnd && !cancelled && !session.timeouts && !session.limit &&
                         [...session.seen].every((seenKey) => records.get(seenKey)?.url);
-                    if (found) showViewerToast('Image loaded', 1000);
+                    if (found) hideViewerToast(loadingMessage);
                     else if (confirmedEnd) {
                         knownEnds.set(direction, key);
-                        if (loadingShown) hideViewerToast(loadingMessage);
+                        hideViewerToast(loadingMessage);
                     } else showViewerToast(`Image search ${cancelled ? 'stopped' : 'incomplete'} · Press the arrow again to retry`, 4000);
                 }
                 log('navigation-finish', { direction, found, reachedEnd, timeouts: session.timeouts });
@@ -2345,7 +2348,7 @@
         viewerToastHideTimer = setTimeout(() => {
             if (viewerToastEl) {
                 viewerToastEl.style.opacity = '0';
-                setTimeout(() => {
+                viewerToastHideTimer = setTimeout(() => {
                     try {
                         viewerToastEl.hidePopover();
                     } catch (e) {}
