@@ -28,7 +28,7 @@ test('navigation diagnostics track virtualization and redact image URLs', async 
     window: {}, document, location: { origin: 'https://chatgpt.com', pathname: '/c/test' },
     imageNavigationSearch: null, ivChatGPTGallery: null, overlay: null, overlayImage: null, imgs: [], currentIndex: -1,
     innerWidth: 1200, innerHeight: 900,
-    shouldSkipImage: img => !!img.skip, isExcludedImage: img => !!img.skip,
+    isExcludedImage: img => !!img.skip,
     getComputedStyle: () => ({ flexDirection: 'column-reverse' }),
     console: { log: msg => logs.push(msg), info: () => {} },
     setTimeout: cb => { timerCallback = cb; return 1; }, clearTimeout: () => { timerCallback = null; },

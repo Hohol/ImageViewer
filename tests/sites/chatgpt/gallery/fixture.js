@@ -16,11 +16,13 @@ const sleep = ms => new Promise(resolve => nativeTimeout(resolve, ms));
 const events = [];
 
 // Surrounding viewer APIs are stubs; the gallery below is extracted verbatim
-// from the current userscript. Navigation integration has a separate Node test.
+// from the current userscript, as are its image eligibility rules.
+// Navigation integration has a separate Node test.
 let overlay = null, imgs = [], currentIndex = -1;
 const ivChatGPTNavigationDebug = { record(event, data) { events.push({ event, ...data }); } };
 function isChatGPTHost() { return true; }
-function shouldSkipImage() { return false; }
+function isGrokHost() { return false; }
+function isGeminiHost() { return false; }
 function clearOverlay() { overlay = null; }
 function hideFullscreen() { overlay = null; }
 function hideViewerHotkeysModal() {}
@@ -54,6 +56,7 @@ let siteURLs = [], removedURLs = [], generation = 0;
 let branchFrom = Infinity, branchSuffix = '', imageEvery = 1;
 let definitions = null;
 let moves = 0;
+let decorateImage = () => {};
 let rejectFetch = false;
 window.fetch = (...args) => rejectFetch && String(args[0]).startsWith('blob:')
   ? Promise.reject(new TypeError('Fixture: blocked image fetch')) : nativeFetch(...args);
@@ -132,6 +135,7 @@ function render() {
       img.src = URL.createObjectURL(blob);
       siteURLs.push(img.src);
       preview.append(img);
+      decorateImage(turn, img);
     }, delay / scale);
   }
   if (paginate && first > 0 && position >= root.scrollHeight - root.clientHeight - 2 && !historyTimer) {

@@ -508,8 +508,7 @@
                 message: message?.getAttribute('data-chatgpt-search-message-ids') ||
                     message?.getAttribute('data-message-id') || null,
                 src: sourceId(img.src), currentSrc: sourceId(img.currentSrc),
-                connected: img.isConnected, skipped: shouldSkipImage(img),
-                clickExcluded: isExcludedImage(img),
+                connected: img.isConnected, skipped: isExcludedImage(img),
                 complete: img.complete, natural: [img.naturalWidth, img.naturalHeight],
                 size: [Math.round(rect.width), Math.round(rect.height)],
                 inViewport: rect.width > 0 && rect.height > 0 && rect.bottom > 0 &&
@@ -750,7 +749,7 @@
                         owner?.getAttribute('data-message-id') || turnKey(turn);
                     const slot = slots.get(message) || 0;
                     slots.set(message, slot + 1);
-                    if (shouldSkipImage(img)) continue;
+                    if (isExcludedImage(img)) continue;
                     const key = JSON.stringify([turnKey(turn), message, slot]);
                     if (discardedImages.get(img) === key) continue;
                     // New turns/images can extend a previously complete conversation.
@@ -913,6 +912,8 @@
             if (!syncConversation() || !records.size) return null;
             const current = mounted();
             const available = new Map(current.map((item) => [item.key, item]));
+            // Eligibility was checked on the source image before capture. Cached
+            // copies no longer have the site's ancestor markup to inspect.
             for (const record of records.values()) {
                 if (record.url) available.set(record.key, { ...record, img: record.image });
             }
@@ -1600,8 +1601,9 @@
         document.head.appendChild(s);
     }
 
-    // Check if image should be skipped from navigation (avatars, previews, etc.)
-    function shouldSkipImage(img) {
+    // One eligibility rule for clicking, navigation, and gallery capture. Apply
+    // this to source images while their site-specific ancestors are still present.
+    function isExcludedImage(img) {
         if (isGrokHost() && !isGrokOptInImage(img)) return true;
         if (isGeminiHost() && !isGeminiOptInImage(img)) return true;
         if (isChatGPTProfileImage(img)) return true;
@@ -1610,7 +1612,7 @@
         if (alt === 'User' || alt === 'pfp') return true;
         // Grok grid thumbnails (e.g. alt="Thumbnail 1")
         if (alt && /^Thumbnail\b/i.test(alt)) return true;
-        // Grok compact selectable grid cards (same cards as click exclude below)
+        // Grok compact selectable grid cards
         if (img.closest('[class*="compact-card"]')) return true;
         // Skip preview images (Grok: /preview-image or .../preview_image.jpg)
         if (img.src.endsWith('/preview-image')) return true;
@@ -1621,12 +1623,6 @@
         // Skip blurred background images (decorative backdrops)
         const parent = img.parentElement;
         if (parent && parent.classList.contains('blur-2xl')) return true;
-        return false;
-    }
-
-    // Exclude certain images and generated-image blocks on initial click
-    function isExcludedImage(img) {
-        if (shouldSkipImage(img)) return true;
         if (img.closest('div.flex.flex-col.gap-2')) {
             const grokOk = isGrokHost() && isGrokOptInImage(img);
             const geminiOk = isGeminiHost() && isGeminiOptInImage(img);
@@ -1989,7 +1985,7 @@
         const seen = new Set();
         const list = [];
         for (const imgEl of allImgs) {
-            if (overlay?.contains(imgEl) || shouldSkipImage(imgEl)) continue;
+            if (overlay?.contains(imgEl) || isExcludedImage(imgEl)) continue;
             const src = imgEl.src;
             if (!src || seen.has(src)) continue;
             seen.add(src);
@@ -2082,7 +2078,7 @@
 
     function showFullscreen(img) {
         if (ivChatGPTGallery?.scanning) return;
-        if (!img || shouldSkipImage(img)) return;
+        if (!img || isExcludedImage(img)) return;
         ivContextMenuInFullscreen = false;
         
         imgs = collectNavigableImages();

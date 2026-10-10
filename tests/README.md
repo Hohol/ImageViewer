@@ -11,12 +11,17 @@ tests/
   shared/
     viewer/
       navigation.test.cjs
+      eligibility/           # Real DOM checks for the common filter
   sites/
     chatgpt/
       navigation-debug.test.cjs
       gallery/
         fixture.{html,css,js}
         *.browser.js
+    gemini/
+      image-eligibility.browser.js
+    grok/
+      image-eligibility.browser.js
   support/
     source.cjs
     browser/                 # Generic runner, registry, and assertion reporting
@@ -38,9 +43,10 @@ belongs in `support/`.
 | Shared viewer navigation | Partial: cached navigation, ChatGPT search handoff, repeated keys, stale-result cancellation, basic non-ChatGPT fallback |
 | ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries, edited branches, long text spans |
 | ChatGPT navigation diagnostics | Detached images, turn changes, URL redaction, bounded logs, listener cleanup |
-| Gemini integration | No dedicated tests yet |
-| Grok integration | No dedicated tests yet, including saved-media filters and deletion controls |
-| Other shared viewer features | No dedicated tests yet for image eligibility, fit/zoom, fullscreen, clipboard, new-tab opening, hotkeys, video controls, or loop export |
+| Shared image eligibility | Common exclusions and ChatGPT generated-image exceptions agree for clicking and navigation |
+| Gemini integration | Inline generated images, lightbox images, source/markup eligibility, upload-preview exclusions |
+| Grok integration | Chat/Imagine image eligibility, hero/card layouts, filmstrip and other thumbnail exclusions; saved-media filters and deletion controls remain untested |
+| Other shared viewer features | No dedicated tests yet for fit/zoom, fullscreen, clipboard, new-tab opening, hotkeys, video controls, or loop export |
 
 ## Command-line checks
 
@@ -71,7 +77,7 @@ each suite in a fresh iframe; expand Results for assertion details. Failed or
 stalled suites are reported, and the remaining suites still run. Stop the server
 with Ctrl+C. Set `PORT=8766` if the default port is occupied.
 
-The current browser suites are all under `chatgpt/gallery/`:
+The ChatGPT gallery suites are under `chatgpt/gallery/`:
 
 | Case | Coverage |
 | --- | --- |
@@ -81,6 +87,12 @@ The current browser suites are all under `chatgpt/gallery/`:
 | `boundaries` | Silent confirmed ends, immediate search feedback, direction reversal, new content, incomplete searches |
 | `branches` | Edit cancellation and submission, preserving earlier images, stale DOM/fetches, new branch images, edits during scans |
 | `long-text` | Scan and navigation skip large text spans while retaining sparse images |
+| `eligibility` | Real image exclusions during scans, passive capture, and lookup through unloaded turns |
+
+The `shared/viewer/image-eligibility`, `gemini/image-eligibility`, and
+`grok/image-eligibility` suites compare the actual filter, click targeting, and
+navigation collection on synthetic DOM layouts. Their fixture blocks external
+image requests; CDN URLs are used only to exercise source-eligibility rules.
 
 To rerun one suite, open
 `/sites/chatgpt/gallery/fixture.html?suite=chatgpt/gallery/branches`.
@@ -103,9 +115,11 @@ the browser. Expected failed blob fetches appear in the console during revocatio
 and broken-image tests.
 
 `support/source.cjs` extracts shipped functions by explicit source boundaries
-and fails loudly if a refactor moves them. Section names identify ownership,
+and fails loudly if a refactor moves them. A section can combine related function
+fragments while omitting unrelated startup side effects. Section names identify ownership,
 for example `chatgpt/gallery` and `shared/viewer/navigation`. Surrounding viewer
-APIs are stubbed. These tests do not prove compatibility with changed live-site
+APIs are stubbed, but gallery fixtures use the real image eligibility rules.
+These tests do not prove compatibility with changed live-site
 markup, userscript managers, or Chrome background-tab rendering. Check those in
 the actual site/browser when relevant. Overriding `document.hidden` does not
 establish background support.
