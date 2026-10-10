@@ -679,11 +679,15 @@
             return { passive: true, cancelled: false, controllers: new Set(), attempted: new WeakMap() };
         }
 
-        function reset() {
+        function reset(reason = 'conversation-change') {
             editingTurn = null;
             discardedTurns = new WeakMap();
             discardedImages = new WeakMap();
-            if (run) run.cancelled = true;
+            if (run) {
+                run.cancelReason = reason;
+                log('reset', { reason, ...scanState(run) });
+                run.cancelled = true;
+            }
             passive.cancelled = true;
             for (const controller of passive.controllers) controller.abort();
             passive = newPassiveSession();
@@ -787,7 +791,7 @@
                 const key = turnKey(turn);
                 if (removed.has(key) && key !== edit.key) discardedTurns.set(turn, key);
             }
-            cancel();
+            cancel('edited-branch');
             passive.cancelled = true;
             for (const controller of passive.controllers) controller.abort();
             passive = newPassiveSession();
@@ -886,6 +890,7 @@
                 if (!blob?.size) throw new Error('Image unavailable');
                 if (bytes - record.size + blob.size > maxBytes) {
                     session.limit = true;
+                    session.cancelReason = 'memory-limit';
                     session.cancelled = true;
                     if (session.passive) showViewerToast('Image cache full for this chat', 4000);
                     return;
@@ -933,9 +938,29 @@
                 ? -distance : el.scrollHeight - el.clientHeight - distance;
         }
 
+        function scanState(session) {
+            return {
+                navigation: !!session.navigation, hidden: document.hidden,
+                visibility: document.visibilityState, focused: document.hasFocus(),
+                cancelled: session.cancelled, cancelReason: session.cancelReason || null,
+                epochMatches: session.epoch === generation, conversationMatches: session.id === conversationId(),
+                timelineMatches: session.root === timeline(), rootConnected: session.root.isConnected,
+                paused: session.pausedAt != null,
+                pausedMs: Math.round((session.pausedMs || 0) +
+                    (session.pausedAt != null ? performance.now() - session.pausedAt : 0)),
+                distance: Math.round(fromBottom(session.root)),
+                extent: session.root.scrollHeight - session.root.clientHeight,
+            };
+        }
+
         function active(session) {
-            return !session.cancelled && session.epoch === generation &&
+            const valid = !session.cancelled && session.epoch === generation &&
                 session.id === conversationId() && session.root === timeline() && session.root.isConnected;
+            if (!valid && !session.inactiveLogged) {
+                session.inactiveLogged = true;
+                log('inactive', scanState(session));
+            }
+            return valid;
         }
 
         function signature(root) {
@@ -949,16 +974,34 @@
         function updateProgress(session) {
             if (!session.label) return;
             const count = [...records.values()].filter((record) => record.url).length;
-            session.label.textContent = `Loading chat images… ${count} saved · Esc to cancel`;
+            const status = session.pausedAt != null ? 'Scan paused until you return' : 'Loading chat images…';
+            session.label.textContent = `${status} ${count} saved · Esc to cancel`;
+        }
+
+        function scanTime(session) {
+            return (session.pausedAt ?? performance.now()) - (session.pausedMs || 0);
         }
 
         async function settle(session, minWait = null) {
-            const start = performance.now();
+            const start = scanTime(session);
             let changed = start;
             let previous = '';
             while (active(session)) {
-                // Background tabs throttle timers and lazy rendering. Do not scan past unseen content.
-                if (document.hidden) { session.cancelled = true; break; }
+                // Preserve full scans while background rendering is suspended.
+                // Directional navigation retains its existing cancellation behavior.
+                if (document.hidden) {
+                    if (session.navigation) { session.cancelReason = 'navigation-hidden'; session.cancelled = true; break; }
+                    if (!session.waitingForVisibility) {
+                        session.waitingForVisibility = true;
+                        log('waiting-for-visible', scanState(session));
+                    }
+                    await pause(200);
+                    continue;
+                }
+                if (session.waitingForVisibility) {
+                    session.waitingForVisibility = false;
+                    log('resumed', scanState(session));
+                }
                 const items = mounted();
                 for (const item of items) {
                     session.seen.add(item.key);
@@ -966,13 +1009,13 @@
                 }
                 updateProgress(session);
                 const next = signature(session.root);
-                if (next !== previous) { previous = next; changed = performance.now(); }
+                if (next !== previous) { previous = next; changed = scanTime(session); }
                 const turns = Array.from(session.root.querySelectorAll(turnSelector));
                 const alreadyChecked = turns.length > 0 && turns.every((turn) =>
                     session.checkedTurns.get(turn) === turnKey(turn));
                 const pending = items.some((item) => !item.img.complete || !item.img.naturalWidth || records.get(item.key)?.pending) ||
                     !!session.root.querySelector('[aria-busy="true"], [role="progressbar"], [data-testid="generated-image-preview"]:not(:has(img))');
-                const now = performance.now();
+                const now = scanTime(session);
                 // New/recycled turn nodes still get a loading window. Once inspected,
                 // moving within the same content only needs a brief render/scroll check.
                 const wait = minWait ?? (alreadyChecked ? 200 : 2500);
@@ -1021,7 +1064,7 @@
         }
 
         async function scan() {
-            if (run?.navigation) { cancel(); await run.done; }
+            if (run?.navigation) { cancel('full-scan-started'); await run.done; }
             if (run) return;
             const id = syncConversation();
             const root = timeline();
@@ -1046,6 +1089,7 @@
             document.body.appendChild(panel);
             const session = {
                 root, id, epoch: generation, label, cancelled: false, timeouts: 0,
+                pausedAt: null, pausedMs: 0,
                 controllers: new Set(), attempted: new Set(), seen: new Set(),
                 checkedTurns: new WeakMap(),
             };
@@ -1054,22 +1098,42 @@
             knownEnds.clear();
             turnOrder = [];
             run = session;
-            cancelButton.addEventListener('click', () => cancel());
-            const onManualScroll = () => cancel();
-            root.addEventListener('wheel', onManualScroll, { passive: true });
-            root.addEventListener('touchstart', onManualScroll, { passive: true });
+            const onVisibilityChange = () => {
+                if (document.hidden && session.pausedAt === null) {
+                    session.pausedAt = performance.now();
+                } else if (!document.hidden && session.pausedAt !== null) {
+                    session.pausedMs += performance.now() - session.pausedAt;
+                    session.pausedAt = null;
+                }
+                updateProgress(session);
+                log('visibility', scanState(session));
+            };
+            document.addEventListener('visibilitychange', onVisibilityChange);
+            onVisibilityChange();
+            cancelButton.addEventListener('click', () => cancel('cancel-button'));
+            const onManualScroll = (event) => {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            };
+            root.addEventListener('wheel', onManualScroll, { passive: false, capture: true });
+            root.addEventListener('touchmove', onManualScroll, { passive: false, capture: true });
             const oldBehavior = root.style.getPropertyValue('scroll-behavior');
             const oldPriority = root.style.getPropertyPriority('scroll-behavior');
+            const oldOverflow = root.style.getPropertyValue('overflow-y');
+            const oldOverflowPriority = root.style.getPropertyPriority('overflow-y');
+            // Hide the draggable scrollbar while retaining programmatic scrolling.
+            root.style.setProperty('overflow-y', 'hidden', 'important');
             root.style.setProperty('scroll-behavior', 'auto', 'important');
             let completed = false;
-            log('start', { distance: fromBottom(root) });
+            let stopReason = 'inactive';
+            log('start', { diagnostics: 'visibility-pause-v1', ...scanState(session) });
             try {
                 setFromBottom(root, 0);
-                const started = performance.now();
+                const started = scanTime(session);
                 while (active(session)) {
                     await settle(session);
                     if (!active(session)) break;
-                    if (performance.now() - started > 20 * 60 * 1000) break;
+                    if (scanTime(session) - started > 20 * 60 * 1000) { stopReason = 'duration-limit'; break; }
                     const distance = fromBottom(root);
                     const extent = root.scrollHeight - root.clientHeight;
                     if (distance >= extent - 2) {
@@ -1080,6 +1144,7 @@
                         if (!active(session)) break;
                         if (before === signature(root) && fromBottom(root) >= root.scrollHeight - root.clientHeight - 2) {
                             completed = true;
+                            stopReason = 'confirmed-top';
                             break;
                         }
                         continue;
@@ -1087,8 +1152,10 @@
                     setFromBottom(root, distance + nextScanStep(session));
                 }
             } catch (e) {
+                stopReason = 'error';
                 log('error', { reason: e.name || 'Error' });
             } finally {
+                const exitState = scanState(session);
                 session.cancelled = true;
                 for (const controller of session.controllers) controller.abort();
                 if (session.epoch === generation) {
@@ -1111,8 +1178,10 @@
                 }
                 // Leave completed scans at the oldest turn, or cancelled scans where they stopped.
                 root.style.setProperty('scroll-behavior', oldBehavior, oldPriority);
-                root.removeEventListener('wheel', onManualScroll);
-                root.removeEventListener('touchstart', onManualScroll);
+                root.style.setProperty('overflow-y', oldOverflow, oldOverflowPriority);
+                root.removeEventListener('wheel', onManualScroll, true);
+                root.removeEventListener('touchmove', onManualScroll, true);
+                document.removeEventListener('visibilitychange', onVisibilityChange);
                 panel.remove();
                 run = null;
                 if (session.id === conversationId()) {
@@ -1120,15 +1189,24 @@
                     const failed = [...records.values()].filter((record) => record.failed && !record.url).length;
                     const status = session.limit ? 'Memory limit reached' : completed ? 'Scan finished' : 'Scan stopped';
                     showViewerToast(`${status}: ${count} images saved${session.timeouts || failed ? ' · Some images may be missing; run again to retry' : ''}`, 6000);
-                    log('finish', { completed, count, failed, timeouts: session.timeouts, bytes });
                 }
+                log('finish', {
+                    completed, reason: session.cancelReason || stopReason, exitState,
+                    count: [...records.values()].filter((record) => record.url).length,
+                    failed: [...records.values()].filter((record) => record.failed && !record.url).length,
+                    timeouts: session.timeouts, bytes,
+                });
                 syncConversation();
                 captureMounted();
             }
         }
 
-        function cancel() {
+        function cancel(reason = 'api', detail = {}) {
             if (!run) return;
+            if (!run.cancelled) {
+                run.cancelReason = reason;
+                log('cancel', { reason, ...detail, ...scanState(run) });
+            }
             run.cancelled = true;
             for (const controller of run.controllers) controller.abort();
         }
@@ -1149,7 +1227,7 @@
             // Unknown boundaries need immediate feedback, including while an older
             // search is winding down. Confirmed ends have already returned above.
             showViewerToast(loadingMessage, 30000);
-            if (run?.navigation) { cancel(); await run.done; }
+            if (run?.navigation) { cancel('navigation-replaced'); await run.done; }
             if (!isCurrent()) return null;
             if (run || id !== conversationId() || root !== timeline()) {
                 hideViewerToast(loadingMessage);
@@ -1165,7 +1243,7 @@
             const oldBehavior = root.style.getPropertyValue('scroll-behavior');
             const oldPriority = root.style.getPropertyPriority('scroll-behavior');
             root.style.setProperty('scroll-behavior', 'auto', 'important');
-            const onManualScroll = () => cancel();
+            const onManualScroll = (event) => cancel('manual-' + event.type, { trusted: event.isTrusted });
             root.addEventListener('wheel', onManualScroll, { passive: true });
             root.addEventListener('touchstart', onManualScroll, { passive: true });
             log('navigation-start', { direction });
@@ -1283,7 +1361,7 @@
             if (observeTimeline() || previous !== conversation) captureMounted();
         }, 1000);
         window.addEventListener('pagehide', () => {
-            reset(); conversation = null;
+            reset('pagehide'); conversation = null;
             observer.disconnect(); observedRoot = null;
             clearTimeout(captureTimer); captureTimer = null;
         });
@@ -1291,7 +1369,7 @@
         captureMounted();
         return {
             scan, cancel, images, findNext,
-            cancelNavigation() { if (run?.navigation) cancel(); },
+            cancelNavigation() { if (run?.navigation) cancel('navigation-cancelled'); },
             get scanning() { return !!run && !run.navigation; },
             key: (img) => imageKeys.get(img),
             original(img) {
@@ -1307,6 +1385,7 @@
     function handleChatGPTDocumentEdgeKeydown(e) {
         if (
             !isChatGPTHost() ||
+            ivChatGPTGallery?.scanning ||
             overlay ||
             !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey ||
             (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') ||
@@ -5104,9 +5183,13 @@
             if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                ivChatGPTGallery.cancel();
-            } else if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
-                ivChatGPTGallery.cancel();
+                ivChatGPTGallery.cancel('escape');
+            } else if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key) &&
+                !isKeyboardTypingTarget(e.target) &&
+                !((e.ctrlKey || e.metaKey) && ['PageUp', 'PageDown'].includes(e.key)) &&
+                !(e.key === ' ' && e.target.closest?.('button, [role="button"], a[href]'))) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
             }
             return;
         }

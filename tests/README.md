@@ -83,7 +83,7 @@ The ChatGPT gallery suites are under `chatgpt/gallery/`:
 
 | Case | Coverage |
 | --- | --- |
-| `scan` | Pagination, delayed images, owned blobs, scan position, cancellation, conversation changes, fetch fallback, broken images |
+| `scan` | Pagination, delayed images, owned blobs, scan position, scroll locking, visibility pause/resume, cancellation, conversation changes, fetch fallback, broken images |
 | `manual` | Passive capture, disjoint scroll jumps, remounts, pending captures, predecoded insertions, timeline replacement |
 | `navigation` | Searching both directions through unloaded turns, pagination, cancellation, chat changes |
 | `boundaries` | Silent confirmed ends, immediate search feedback, direction reversal, new content, incomplete searches |

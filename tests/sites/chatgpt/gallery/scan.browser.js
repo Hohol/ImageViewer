@@ -1,7 +1,19 @@
 (async () => {
   const gallery = await createGallery();
   setup({ initial: 4, history: true, start: 600, lazy: 3000 });
-  await gallery.scan();
+  const originalOverflow = root.style.getPropertyValue('overflow-y');
+  const scanningWithScroll = gallery.scan();
+  const wheel = new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true });
+  const touch = new Event('touchmove', { bubbles: true, cancelable: true });
+  root.dispatchEvent(wheel);
+  root.dispatchEvent(touch);
+  check(wheel.defaultPrevented && touch.defaultPrevented && gallery.scanning &&
+    getComputedStyle(root).overflowY === 'hidden', 'manual scrolling is blocked without cancelling the scan');
+  await scanningWithScroll;
+  const wheelAfter = new WheelEvent('wheel', { bubbles: true, cancelable: true });
+  root.dispatchEvent(wheelAfter);
+  check(!wheelAfter.defaultPrevented && root.style.getPropertyValue('overflow-y') === originalOverflow,
+    'finishing a scan restores manual scrolling and the scrollbar');
   let list = gallery.images();
   check(list.length === 12, 'scan catches delayed images across older-history pagination');
   check(list.map(img => JSON.parse(gallery.key(img))[0]).join(',') ===
@@ -34,11 +46,58 @@
   list = gallery.images();
   check(list.length > 0 && list.length < 20, 'cancellation retains the partial gallery');
   check(distance() === stopped, 'cancellation leaves the current scroll position');
+  check(root.style.getPropertyValue('overflow-y') === originalOverflow,
+    'cancellation also releases the scroll lock');
 
   setup({ id: 'switch-chat', count: 20 });
   nativeTimeout(() => { composer.dataset.mapComposerConversation = 'another-chat'; clearTurns(); }, 200);
   await gallery.scan();
   check(gallery.images() === null, 'conversation switch during scan discards the previous chat cache');
+
+  // Simulate visibility transitions to test scan lifecycle, not browser throttling.
+  const hiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
+  const setHidden = value => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value });
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  try {
+    setup({ id: 'pause-chat', count: 6 });
+    const scanning = gallery.scan();
+    await sleep(60);
+    setHidden(true);
+    const pausedDistance = distance();
+    await sleep(700); // Longer than the subject's accelerated section timeout.
+    check(gallery.scanning && distance() === pausedDistance,
+      'hidden scan remains active without scrolling');
+    setHidden(false);
+    await scanning;
+    check(gallery.images().length === 6 &&
+      events.filter(event => event.event === 'scan-finish').at(-1).timeouts === 0,
+      'returning to the tab completes the gallery without a hidden-time timeout');
+
+    setup({ id: 'cancel-paused-chat', count: 6 });
+    const cancelling = gallery.scan();
+    setHidden(true);
+    gallery.cancel();
+    await cancelling;
+    setHidden(false);
+    check(!gallery.scanning && !document.querySelector('#iv-chatgpt-scan'),
+      'cancelling a hidden scan cleans up without resuming');
+
+    setup({ id: 'switch-paused-chat', count: 6 });
+    const switching = gallery.scan();
+    setHidden(true);
+    composer.dataset.mapComposerConversation = 'another-paused-chat';
+    clearTurns();
+    await switching;
+    setHidden(false);
+    check(!gallery.scanning && gallery.images() === null,
+      'changing chats abandons a paused scan and its old cache');
+  } finally {
+    if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor);
+    else delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  }
 
   rejectFetch = true;
   setup({ id: 'canvas-fallback', count: 2 });
