@@ -10,4 +10,3 @@ This tracked file contains shared project knowledge useful across machines. Keep
 - It augments these sites' interfaces in various ways, primarily to improve image and video viewing.
 - Its fullscreen mode is an image-viewing overlay, opened for an eligible image by clicking it or pressing F or the slash key. This is distinct from the browser's own fullscreen mode (for example, F11).
 - `tests/` groups dependency-free checks by shared feature (`shared/`) and site (`sites/`), with reusable infrastructure in `support/`. See `tests/README.md` for commands.
-- `temp/` contains ignored browser snapshots and debugging artifacts. Use them only when relevant to a reported bug; they are not production source.
