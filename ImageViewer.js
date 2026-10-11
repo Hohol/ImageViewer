@@ -50,6 +50,11 @@
     let ivChatGPTNavigationDebug = null;
     let ivChatGPTGallery = null;
     let imageNavigationSearch = null;
+    if (isChatGPTHost()) {
+        const style = document.createElement('style');
+        style.textContent = '[data-app-action-timeline-scroll]:focus-visible { outline: none !important; box-shadow: none !important; }';
+        document.head.appendChild(style);
+    }
     /** false: fit to viewport; true: natural pixels + scroll. Remembered for this page session. */
     let overlayFitNative = false;
     let overlayScrollKeys = new Set();
