@@ -8,5 +8,12 @@ This tracked file contains shared project knowledge useful across machines. Keep
 - The shipped source is `ImageViewer.js`; there is no build step or package manager.
 - It runs on ChatGPT, Gemini, and Grok.
 - It augments these sites' interfaces in various ways, primarily to improve image and video viewing.
-- Its fullscreen mode is an image-viewing overlay, opened for an eligible image by clicking it or pressing F or the slash key. This is distinct from the browser's own fullscreen mode (for example, F11).
 - `tests/` groups dependency-free checks by shared feature (`shared/`) and site (`sites/`), with reusable infrastructure in `support/`. See `tests/README.md` for commands.
+
+## Feature map
+
+- **Gallery mode** — The image-viewing overlay, opened by clicking an eligible image or pressing F or `/`. It can run with browser fullscreen on or off. Uses cached images on ChatGPT; when none is visible, the hotkey opens the known image nearest the current view. Existing code may call this image fullscreen. Entry point: `showFullscreen()`.
+- **Image eligibility** — Shared exclusion rules for clicks, navigation, and cache capture. Entry point: `isExcludedImage()`.
+- **ChatGPT image scan** — scrolls through virtualized conversation history and caches images so they survive unloading. Pauses while the tab is hidden and blocks manual scrolling. Entry point: `createChatGPTGallery()` → `scan()`.
+
+Update existing feature-map entries when their logic, entry points, or user-facing behavior changes. Add new entries only when the user explicitly requests them.
