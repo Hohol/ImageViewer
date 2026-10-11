@@ -21,6 +21,8 @@
   await sleep(80);
   await Promise.all(list.map(img => img.decode()));
   check(gallery.images().length === 12, 'cached images survive removal and source URL revocation');
+  check(JSON.parse(gallery.key(gallery.nearestImage()))[0] === 'turn-10',
+    'nearest image uses cached positions when source images are unmounted');
   render();
   await sleep(130);
   check(gallery.images().length === 12, 'remounting with new blob URLs does not duplicate manual captures');

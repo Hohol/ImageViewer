@@ -759,7 +759,11 @@
                     // New turns/images can extend a previously complete conversation.
                     if (!records.has(key)) knownEnds.clear();
                     imageKeys.set(img, key);
-                    result.push({ key, turn: turnKey(turn), order: order++, img });
+                    const rect = img.getBoundingClientRect();
+                    const position = distance - (rect.top + rect.height / 2 - top);
+                    const record = records.get(key);
+                    if (record) record.position = position;
+                    result.push({ key, turn: turnKey(turn), order: order++, img, position });
                 }
             }
             return result;
@@ -853,6 +857,7 @@
                 records.set(item.key, record);
             }
             record.order = item.order;
+            record.position = item.position;
             const img = item.img;
             const pixels = img.naturalWidth * img.naturalHeight;
             if (record.pending || (record.url && record.pixels >= pixels)) return;
@@ -926,6 +931,23 @@
             return [...available.values()].sort((a, b) =>
                 (ranks.get(a.turn) ?? Infinity) - (ranks.get(b.turn) ?? Infinity) || a.order - b.order,
             ).map((item) => item.img);
+        }
+
+        function nearestImage() {
+            const list = images() || [];
+            const root = timeline();
+            if (!root) return null;
+            const center = fromBottom(root) - root.clientHeight / 2;
+            let nearest = null;
+            let bestDistance = Infinity;
+            for (const img of list) {
+                const record = records.get(imageKeys.get(img));
+                const position = record?.position;
+                if (!Number.isFinite(position)) continue;
+                const distance = Math.abs(position - center);
+                if (distance < bestDistance) { nearest = img; bestDistance = distance; }
+            }
+            return nearest;
         }
 
         function fromBottom(el) {
@@ -1368,7 +1390,7 @@
         window.addEventListener('pageshow', scheduleCapture);
         captureMounted();
         return {
-            scan, cancel, images, findNext,
+            scan, cancel, images, findNext, nearestImage,
             cancelNavigation() { if (run?.navigation) cancel('navigation-cancelled'); },
             get scanning() { return !!run && !run.navigation; },
             key: (img) => imageKeys.get(img),
@@ -5240,7 +5262,8 @@
                 }
                 return;
             }
-            const img = pickBestVisibleEligibleImage();
+            // Virtualized chats may have cached images with no mounted/visible source.
+            const img = pickBestVisibleEligibleImage() || ivChatGPTGallery?.nearestImage() || collectNavigableImages()[0];
             if (img) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
