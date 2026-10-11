@@ -11,6 +11,7 @@ tests/
   shared/
     viewer/
       navigation.test.cjs
+      browser-fullscreen.test.cjs
       eligibility/           # Real DOM checks for the common filter
   sites/
     chatgpt/
@@ -41,6 +42,7 @@ belongs in `support/`.
 | Area | Coverage |
 | --- | --- |
 | Shared viewer navigation | Partial: cached navigation, ChatGPT search handoff, repeated keys, stale-result cancellation, basic non-ChatGPT fallback |
+| Gallery browser fullscreen | Mode transitions retain the overlay; failed entry, repeated requests, and closing in-page mode (mocked browser API) |
 | ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries, edited branches, long text spans |
 | ChatGPT search-image cards | Excluded from clicks, navigation, and gallery capture; generated images and generic image/button components stay eligible |
 | ChatGPT SVG components | Marked SVG components are excluded; ordinary SVG images stay eligible |
@@ -48,7 +50,7 @@ belongs in `support/`.
 | Shared image eligibility | Common exclusions and ChatGPT generated-image exceptions agree for clicking and navigation |
 | Gemini integration | Inline generated images, lightbox images, source/markup eligibility, upload-preview exclusions |
 | Grok integration | Chat/Imagine image eligibility, hero/card layouts, filmstrip and other thumbnail exclusions; saved-media filters and deletion controls remain untested |
-| Other shared viewer features | No dedicated tests yet for fit/zoom, fullscreen, clipboard, new-tab opening, hotkeys, video controls, or loop export |
+| Other shared viewer features | No dedicated tests yet for fit/zoom, native browser fullscreen behavior, clipboard, new-tab opening, hotkeys, video controls, or loop export |
 
 ## Command-line checks
 

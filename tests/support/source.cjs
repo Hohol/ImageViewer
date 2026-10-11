@@ -3,6 +3,10 @@ const path = require('node:path');
 
 const scriptPath = path.resolve(__dirname, '../../ImageViewer.js');
 const sections = {
+  'shared/viewer/browser-fullscreen': [
+    ['    async function toggleGalleryBrowserFullscreen()', '    function scrollToImage()'],
+    ['    // Close overlay on real fullscreen exit.', '    // === VIDEO FULLSCREEN FUNCTIONALITY ==='],
+  ],
   'shared/viewer/image-eligibility': [
     ['    function isChatGPTProfileImage(', '    function viewerImageSrcForNewTab('],
     ['    function isGeminiOptInResultSrc(', '    // Grok: chat cards use'],

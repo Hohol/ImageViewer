@@ -272,6 +272,8 @@
     }
 
     let ivIntentionalFullscreenExit = false;
+    let galleryInPage = false;
+    let galleryFullscreenPending = false;
     let ivPendingVisualFullscreenExit = false;
     let ivStuckFsElement = null;
     /** Right-click while fullscreen can desync API vs window; only then do enter→exit. */
@@ -1759,6 +1761,7 @@
         overlay.removeEventListener('click', hideFullscreen);
         overlay.remove();
         overlay = null;
+        galleryInPage = false;
     }
 
     // BROWSER BUG WORKAROUND: When user right-clicks and uses context menu (e.g., "Copy image"
@@ -1797,6 +1800,33 @@
         return result;
     }
 
+    async function toggleGalleryBrowserFullscreen() {
+        if (!overlay || galleryFullscreenPending) return;
+        const currentOverlay = overlay;
+        const wasInPage = galleryInPage;
+        const exiting = isFullscreenApiActive();
+        const target = exiting ? document : document.documentElement;
+        const action = exiting
+            ? document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen
+            : target.requestFullscreen || target.webkitRequestFullscreen || target.mozRequestFullScreen || target.msRequestFullscreen;
+        if (!action) { showViewerToast('Browser fullscreen is unavailable'); return; }
+        galleryFullscreenPending = true;
+        galleryInPage = exiting;
+        ivPendingVisualFullscreenExit = false;
+        ivIntentionalFullscreenExit = false;
+        try {
+            await action.call(target);
+        } catch (error) {
+            if (overlay === currentOverlay) {
+                galleryInPage = wasInPage;
+                showViewerToast('Could not toggle browser fullscreen');
+            }
+            ivLogFullscreenExit('gallery fullscreen toggle failed', { name: error.name });
+        } finally {
+            galleryFullscreenPending = false;
+        }
+    }
+
     function hideFullscreen() {
         const doc = document;
         const apiFs = isFullscreenApiActive(doc);
@@ -1806,6 +1836,12 @@
         ivLogFullscreenExit('hideFullscreen', { apiFs, hadOverlay });
         ivIntentionalFullscreenExit = true;
         ivPendingVisualFullscreenExit = false;
+
+        if (!apiFs && galleryInPage) {
+            clearOverlay();
+            ivIntentionalFullscreenExit = false;
+            return;
+        }
 
         if (!apiFs && hadOverlay) {
             clearOverlay();
@@ -2187,6 +2223,7 @@
         if (ivChatGPTGallery?.scanning) return;
         if (!img || isExcludedImage(img)) return;
         ivContextMenuInFullscreen = false;
+        galleryInPage = false;
         
         imgs = collectNavigableImages();
         
@@ -2323,6 +2360,12 @@
     function handleOverlayKeydown(e) {
         if (viewerHotkeysModalBlocksKeydown(e)) return;
         if (!overlay) return;
+        if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (!e.repeat) void toggleGalleryBrowserFullscreen();
+            return;
+        }
         if (e.key === 'Escape') {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -2393,6 +2436,10 @@
     .forEach(evt => document.addEventListener(evt, () => {
         ivLogFullscreenExit('fullscreenchange', { evt });
         if (overlay && !isFullscreenApiActive()) {
+            if (galleryInPage) {
+                ivIntentionalFullscreenExit = false;
+                return;
+            }
             if (ivIntentionalFullscreenExit) {
                 ivIntentionalFullscreenExit = false;
                 ivLogFullscreenExit('fullscreenchange: intentional API exit');
@@ -2579,6 +2626,7 @@
             title: 'Image fullscreen',
             items: [
                 ['Esc', 'Close'],
+                ['B', 'Toggle browser fullscreen (show / hide browser tabs)'],
                 ['.', 'Toggle fit screen / native resolution'],
                 ['→  Space', 'Next image'],
                 ['←  ⌘  Alt', 'Previous image'],
