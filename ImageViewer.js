@@ -3437,18 +3437,33 @@
             btn.querySelector('video')?.getAttribute('src') || btn;
     }
 
+    function collectImagineVideoButtons(allButtons) {
+        return allButtons.filter((btn) => {
+            if (btn.disabled || btn.hidden || btn.style.display === 'none') return false;
+            // Video slides can render only an image thumbnail, with a duration badge.
+            return !!btn.querySelector('video') || Array.from(btn.querySelectorAll('span')).some((span) =>
+                /^(?:\d+:)?\d+:\d{2}$/.test(span.textContent.trim()));
+        });
+    }
+
+    function showImagineVideoIndex(button = getImaginePostSelectedFilmstripButton(), buttons = null) {
+        if (!isGrokImaginePage()) return;
+        if (!buttons) {
+            const strip = imaginePostFilmstripScrollEl();
+            if (!strip) return;
+            buttons = collectImagineVideoButtons(Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]')));
+        }
+        const index = buttons.indexOf(button);
+        if (index >= 0) showViewerToast(`${index + 1}/${buttons.length}`, 1000);
+    }
+
     function navigateImagineVideo(direction = 0, unvisitedOnly = false) {
         syncImagineVisitedPage();
         const strip = imaginePostFilmstripScrollEl();
         if (!strip) return false;
         const allButtons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]'));
         imagineFilmstripMediaIds = new Set(allButtons.map(imaginePostIdFromFilmstripButton).filter(Boolean));
-        const buttons = allButtons.filter((btn) => {
-            if (btn.disabled || btn.hidden || btn.style.display === 'none') return false;
-            // Video slides can render only an image thumbnail, with a duration badge.
-            return !!btn.querySelector('video') || Array.from(btn.querySelectorAll('span')).some((span) =>
-                /^(?:\d+:)?\d+:\d{2}$/.test(span.textContent.trim()));
-        });
+        const buttons = collectImagineVideoButtons(allButtons);
         const selected = getImaginePostSelectedFilmstripButton();
         let target;
         if (unvisitedOnly) {
@@ -3472,7 +3487,7 @@
         if (overlay) hideFullscreen();
         // Let Grok update its hero player, including its existing fullscreen video.
         target.click();
-        showViewerToast(`${buttons.indexOf(target) + 1}/${buttons.length}`, 1000);
+        showImagineVideoIndex(target, buttons);
         return true;
     }
 
@@ -4897,6 +4912,7 @@
                 const nearBottom = e.clientY > window.innerHeight * 0.85;
                 const hideStyle = document.getElementById('iv-hide-controls');
                 if (nearBottom) {
+                    if (!video.controls) showImagineVideoIndex();
                     video.controls = true;
                     if (hideStyle) hideStyle.disabled = true;
                 } else {
