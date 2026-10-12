@@ -3,6 +3,12 @@ const path = require('node:path');
 
 const scriptPath = path.resolve(__dirname, '../../ImageViewer.js');
 const sections = {
+  'grok/imagine-random-video': [
+    ['    function pickRandomIndex(', '    function cancelImageNavigationSearch('],
+    ['    function imaginePostFilmstripScrollEl()', '    function imaginePostIdFromFilmstripButton('],
+    ['    function getImaginePostSelectedFilmstripButton()', '    function collectImaginePostFilmstripMediaIds('],
+    ['    function handleViewerKeydown(', '    viewerKeydownHandler = (e) =>'],
+  ],
   'shared/viewer/browser-fullscreen': [
     ['    async function toggleGalleryBrowserFullscreen()', '    function scrollToImage()'],
     ['    // Close overlay on real fullscreen exit.', '    // === VIDEO FULLSCREEN FUNCTIONALITY ==='],

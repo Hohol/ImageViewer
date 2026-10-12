@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.34
+// @version      2.35
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2609,7 +2609,7 @@
             items: [
                 ['H', 'Show keyboard shortcuts'],
                 ['F or /', 'Fullscreen image or video (exit image fullscreen)'],
-                ['R', 'Random image (page or fullscreen)'],
+                ['R', 'Random image; random video on Imagine (page or fullscreen)'],
                 ['T', 'Open image in new tab (page or fullscreen)'],
                 ['C', 'Copy image to clipboard (page or fullscreen)'],
             ],
@@ -3380,6 +3380,28 @@
 
     function imaginePostFilmstripScrollEl() {
         return document.querySelector('[data-filmstrip-scroll="true"]');
+    }
+
+    function isGrokImaginePage() {
+        return isGrokHost() && (location.pathname === '/imagine' || location.pathname.startsWith('/imagine/'));
+    }
+
+    function navigateToRandomImagineVideo() {
+        const strip = imaginePostFilmstripScrollEl();
+        if (!strip) return false;
+        const buttons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]')).filter((btn) => {
+            if (btn.disabled || btn.hidden || btn.style.display === 'none') return false;
+            // Video slides can render only an image thumbnail, with a duration badge.
+            return !!btn.querySelector('video') || Array.from(btn.querySelectorAll('span')).some((span) =>
+                /^(?:\d+:)?\d+:\d{2}$/.test(span.textContent.trim()));
+        });
+        const selected = getImaginePostSelectedFilmstripButton();
+        const next = pickRandomIndex(buttons.length, buttons.indexOf(selected));
+        if (next < 0 || buttons[next] === selected) return false;
+        if (overlay) hideFullscreen();
+        // Let Grok update its hero player, including its existing fullscreen video.
+        buttons[next].click();
+        return true;
     }
 
     function imaginePostIdFromFilmstripButton(btn) {
@@ -5325,10 +5347,16 @@
             return;
         }
 
-        // R: random navigable image (overlay: stay fullscreen; page: open fullscreen)
+        // R: Imagine owns video selection; other pages keep random image navigation.
         if (e.code === 'KeyR') {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             if (isKeyboardTypingTarget(e.target)) return;
+            if (isGrokImaginePage()) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                navigateToRandomImagineVideo();
+                return;
+            }
             const fsEl =
                 document.fullscreenElement ||
                 document.webkitFullscreenElement ||
