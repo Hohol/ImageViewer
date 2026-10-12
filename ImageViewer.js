@@ -2609,7 +2609,7 @@
             items: [
                 ['H', 'Show keyboard shortcuts'],
                 ['F or /', 'Fullscreen image or video (exit image fullscreen)'],
-                ['R', 'Random image; random video on Imagine (page or fullscreen)'],
+                ['R', 'Random image (outside Imagine)'],
                 ['T', 'Open image in new tab (page or fullscreen)'],
                 ['C', 'Copy image to clipboard (page or fullscreen)'],
             ],
@@ -2625,6 +2625,14 @@
                 ['E', 'Export loop region (MP4 or WebM)'],
                 ['←  →', 'Seek ±1 second'],
                 ['↑  ↓', 'Volume up / down'],
+            ],
+        },
+        {
+            title: 'Imagine videos',
+            items: [
+                ['A / D', 'Previous / next video'],
+                ['r', 'Random video'],
+                ['R', 'Random unvisited video'],
             ],
         },
         {
@@ -3386,21 +3394,85 @@
         return isGrokHost() && (location.pathname === '/imagine' || location.pathname.startsWith('/imagine/'));
     }
 
-    function navigateToRandomImagineVideo() {
+    const imagineVisitedVideos = new Set();
+    let imagineFilmstripMediaIds = new Set();
+    let imagineVisitedPage = location.pathname;
+
+    function resetImagineVisitedVideos() {
+        imagineVisitedVideos.clear();
+        imagineFilmstripMediaIds.clear();
+        imagineVisitedPage = location.pathname;
+    }
+
+    function syncImagineVisitedPage() {
+        if (imagineVisitedPage === location.pathname) return;
+        const previousPost = imagineVisitedPage.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
+        const nextPost = location.pathname.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
+        // Grok replaces the post URL for each selection within the same filmstrip.
+        if (previousPost && nextPost && imagineFilmstripMediaIds.has(previousPost) && imagineFilmstripMediaIds.has(nextPost)) {
+            imagineVisitedPage = location.pathname;
+            return;
+        }
+        resetImagineVisitedVideos();
+    }
+
+    function bindImagineVisitedPageLifecycle() {
+        if (!isGrokHost()) return;
+        // Grok changes routes without unloading the document.
+        for (const method of ['pushState', 'replaceState']) {
+            const original = history[method];
+            history[method] = function (...args) {
+                const result = original.apply(this, args);
+                syncImagineVisitedPage();
+                return result;
+            };
+        }
+        window.addEventListener('popstate', syncImagineVisitedPage);
+        window.addEventListener('pagehide', resetImagineVisitedVideos);
+    }
+
+    function imagineVideoVisitKey(btn) {
+        return imaginePostIdFromFilmstripButton(btn) ||
+            btn.querySelector('img')?.getAttribute('src') ||
+            btn.querySelector('video')?.getAttribute('src') || btn;
+    }
+
+    function navigateImagineVideo(direction = 0, unvisitedOnly = false) {
+        syncImagineVisitedPage();
         const strip = imaginePostFilmstripScrollEl();
         if (!strip) return false;
-        const buttons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]')).filter((btn) => {
+        const allButtons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]'));
+        imagineFilmstripMediaIds = new Set(allButtons.map(imaginePostIdFromFilmstripButton).filter(Boolean));
+        const buttons = allButtons.filter((btn) => {
             if (btn.disabled || btn.hidden || btn.style.display === 'none') return false;
             // Video slides can render only an image thumbnail, with a duration badge.
             return !!btn.querySelector('video') || Array.from(btn.querySelectorAll('span')).some((span) =>
                 /^(?:\d+:)?\d+:\d{2}$/.test(span.textContent.trim()));
         });
         const selected = getImaginePostSelectedFilmstripButton();
-        const next = pickRandomIndex(buttons.length, buttons.indexOf(selected));
-        if (next < 0 || buttons[next] === selected) return false;
+        let target;
+        if (unvisitedOnly) {
+            if (buttons.includes(selected)) imagineVisitedVideos.add(imagineVideoVisitKey(selected));
+            const candidates = buttons.filter((btn) => !imagineVisitedVideos.has(imagineVideoVisitKey(btn)));
+            if (!candidates.length) {
+                showViewerToast('No more unvisited videos', 1000);
+                return false;
+            }
+            target = candidates[pickRandomIndex(candidates.length, -1)];
+            imagineVisitedVideos.add(imagineVideoVisitKey(target));
+        } else if (direction) {
+            const selectedIndex = allButtons.indexOf(selected);
+            if (selectedIndex < 0) return false;
+            const candidates = direction < 0 ? buttons.slice().reverse() : buttons;
+            target = candidates.find((btn) => (allButtons.indexOf(btn) - selectedIndex) * direction > 0);
+        } else {
+            target = buttons[pickRandomIndex(buttons.length, buttons.indexOf(selected))];
+        }
+        if (!target || target === selected) return false;
         if (overlay) hideFullscreen();
         // Let Grok update its hero player, including its existing fullscreen video.
-        buttons[next].click();
+        target.click();
+        showViewerToast(`${buttons.indexOf(target) + 1}/${buttons.length}`, 1000);
         return true;
     }
 
@@ -4772,6 +4844,7 @@
         });
     }
 
+    bindImagineVisitedPageLifecycle();
     window.addEventListener('popstate', () => {
         scheduleImaginePostDeleteButtonsSync();
         scheduleGrokImagineSavedKeepSync();
@@ -5347,6 +5420,15 @@
             return;
         }
 
+        // A/D: sequential Imagine videos, stopping at either end of the filmstrip.
+        if ((e.code === 'KeyA' || e.code === 'KeyD') && isGrokImaginePage()) {
+            if (e.metaKey || e.ctrlKey || e.altKey || isKeyboardTypingTarget(e.target)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            navigateImagineVideo(e.code === 'KeyA' ? -1 : 1);
+            return;
+        }
+
         // R: Imagine owns video selection; other pages keep random image navigation.
         if (e.code === 'KeyR') {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -5354,7 +5436,9 @@
             if (isGrokImaginePage()) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                navigateToRandomImagineVideo();
+                // Some keyboard layouts report lowercase even with Caps Lock enabled.
+                const uppercase = e.key === 'R' || (!!e.getModifierState?.('CapsLock') && !e.shiftKey);
+                navigateImagineVideo(0, uppercase);
                 return;
             }
             const fsEl =
