@@ -470,7 +470,7 @@
     }
 
     /** Temporary diagnostics: set false after investigating ChatGPT's virtualized timeline. */
-    const IV_CHATGPT_NAVIGATION_DEBUG = true;
+    const IV_CHATGPT_NAVIGATION_DEBUG = false;
 
     function createChatGPTNavigationDebug() {
         if (!IV_CHATGPT_NAVIGATION_DEBUG || !isChatGPTHost()) return null;
@@ -728,7 +728,6 @@
             for (let i = keys.length - 1; i >= 0; i--) {
                 const key = keys[i];
                 if (turnOrder.includes(key)) continue;
-                knownEnds.clear();
                 const next = keys.slice(i + 1).find((k) => turnOrder.includes(k));
                 const prev = keys.slice(0, i).reverse().find((k) => turnOrder.includes(k));
                 const position = turnPositions.get(key);
@@ -736,6 +735,13 @@
                 const at = next ? turnOrder.indexOf(next) : prev ? turnOrder.indexOf(prev) + 1 :
                     before >= 0 ? before : turnOrder.length;
                 turnOrder.splice(at, 0, key);
+                // Discovering older history cannot invalidate the newer end (and vice versa).
+                for (const [direction, endKey] of knownEnds) {
+                    const endTurn = JSON.parse(endKey)[0];
+                    if ((turnOrder.indexOf(key) - turnOrder.indexOf(endTurn)) * direction > 0) {
+                        knownEnds.delete(direction);
+                    }
+                }
             }
         }
 
@@ -753,27 +759,66 @@
             const result = [];
             for (const turn of turns) {
                 const slots = new Map();
+                const groupedImages = new Map();
                 let order = 0;
                 for (const img of turn.querySelectorAll('img')) {
                     const owner = img.closest('[data-chatgpt-search-message-ids], [data-message-id]');
-                    const message = owner?.getAttribute('data-chatgpt-search-message-ids') ||
+                    let message = owner?.getAttribute('data-chatgpt-search-message-ids') ||
                         owner?.getAttribute('data-message-id') || turnKey(turn);
-                    const slot = slots.get(message) || 0;
+                    let slot = slots.get(message) || 0;
                     slots.set(message, slot + 1);
+                    const messageIds = [...new Set(message.trim().split(/\s+/))];
+                    if (owner && messageIds.length > 1 && img.closest('button[data-testid="generated-image-preview"]')) {
+                        if (!groupedImages.has(owner)) {
+                            groupedImages.set(owner, Array.from(owner.querySelectorAll('img')).filter((node) =>
+                                node.closest('[data-chatgpt-search-message-ids], [data-message-id]') === owner &&
+                                node.closest('button[data-testid="generated-image-preview"]')));
+                        }
+                        const group = groupedImages.get(owner);
+                        // Parallel generated messages share one wrapper in the two-column
+                        // layout. Keep the same message identity as their separate layout.
+                        // Images can mount out of order: image 2 may be the only
+                        // <img> present while image 1 is still loading. Its preview
+                        // number remains stable throughout that transition.
+                        const preview = img.closest('button[data-testid="generated-image-preview"]');
+                        const number = preview.getAttribute('aria-label')?.match(/^Generated image (\d+)$/i);
+                        const index = number ? Number(number[1]) - 1 :
+                            group.length === messageIds.length ? group.indexOf(img) : -1;
+                        // Do not cache an ambiguous temporary identity that would
+                        // become a duplicate once the other image mounts.
+                        if (index < 0 || index >= messageIds.length) continue;
+                        message = messageIds[index];
+                        slot = 0;
+                    }
                     if (isExcludedImage(img)) continue;
                     const key = JSON.stringify([turnKey(turn), message, slot]);
                     if (discardedImages.get(img) === key) continue;
-                    // New turns/images can extend a previously complete conversation.
-                    if (!records.has(key)) knownEnds.clear();
                     imageKeys.set(img, key);
                     const rect = img.getBoundingClientRect();
                     const position = distance - (rect.top + rect.height / 2 - top);
                     const record = records.get(key);
-                    if (record) record.position = position;
+                    if (record) { record.position = position; record.order = order; }
                     result.push({ key, turn: turnKey(turn), order: order++, img, position });
                 }
             }
+            rememberMountedEnds(root, result);
             return result;
+        }
+
+        function rememberMountedEnds(root, items) {
+            for (const [direction, endKey] of knownEnds) {
+                const end = items.find((item) => item.key === endKey) || records.get(endKey);
+                if (!end || items.some((item) => item.turn === end.turn &&
+                    (item.order - end.order) * direction > 0)) knownEnds.delete(direction);
+            }
+            // Remember ends during passive capture, before the user scrolls away.
+            // These are image identities, so recycled DOM nodes do not lose the evidence.
+            for (const direction of [-1, 1]) {
+                const item = direction < 0 ? items[0] : items[items.length - 1];
+                if (item?.img.complete && item.img.naturalWidth && mountedBoundary(root, item.key, direction, items)) {
+                    knownEnds.set(direction, item.key);
+                }
+            }
         }
 
         function rememberEditedTurn(turn) {
@@ -834,6 +879,7 @@
         document.addEventListener('click', (event) => {
             const button = event.target.closest?.('button');
             if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+            if (button.matches('[data-testid="send-button"]')) knownEnds.clear();
             const turn = button.closest(turnSelector);
             if (button.getAttribute('aria-label') === 'Edit message') {
                 rememberEditedTurn(turn);
@@ -852,6 +898,7 @@
             rememberEditedTurn(event.target.closest(turnSelector));
         });
         document.addEventListener('submit', (event) => {
+            if (event.target.querySelector?.('[data-testid="send-button"]')) knownEnds.clear();
             if (isEditingTurn(event.target.closest?.(turnSelector))) discardEditedBranch();
         }, true);
 
@@ -1160,12 +1207,20 @@
                 setFromBottom(root, 0);
                 const started = scanTime(session);
                 while (active(session)) {
-                    await settle(session);
+                    const settled = await settle(session);
                     if (!active(session)) break;
                     if (scanTime(session) - started > 20 * 60 * 1000) { stopReason = 'duration-limit'; break; }
                     const distance = fromBottom(root);
                     const extent = root.scrollHeight - root.clientHeight;
                     if (distance >= extent - 2) {
+                        const turns = Array.from(root.querySelectorAll(turnSelector));
+                        // The normal settle already waited for image capture. Confirm
+                        // every mounted turn up to the true start before skipping pagination delay.
+                        if (settled && mountedTurnBoundary(root, turns[turns.length - 1], -1)) {
+                            completed = true;
+                            stopReason = 'mounted-top';
+                            break;
+                        }
                         // Reaching the current top can trigger another history page. Give it
                         // another quiet period and require unchanged turns and scroll extent.
                         const before = signature(root);
@@ -1216,8 +1271,10 @@
                 if (session.id === conversationId()) {
                     const count = [...records.values()].filter((record) => record.url).length;
                     const failed = [...records.values()].filter((record) => record.failed && !record.url).length;
-                    const status = session.limit ? 'Memory limit reached' : completed ? 'Scan finished' : 'Scan stopped';
-                    showViewerToast(`${status}: ${count} images saved${session.timeouts || failed ? ' · Some images may be missing; run again to retry' : ''}`, 6000);
+                    if (!completed || session.limit || session.timeouts || failed) {
+                        const status = session.limit ? 'Memory limit reached' : completed ? 'Scan incomplete' : 'Scan stopped';
+                        showViewerToast(`${status}: ${count} images saved${session.timeouts || failed ? ' · Some images may be missing; run again to retry' : ''}`, 6000);
+                    }
                 }
                 log('finish', {
                     completed, reason: session.cancelReason || stopReason, exitState,
@@ -1240,14 +1297,59 @@
             for (const controller of run.controllers) controller.abort();
         }
 
+        // Recognize the virtualizer layout used by ChatGPT without assuming that
+        // the first mounted turn (or fallback-turn-0) is the first chat turn.
+        function mountedBoundary(root, key, direction, items) {
+            const selected = items.find((item) => item.key === key);
+            const turn = selected?.img.closest(turnSelector);
+            if (!mountedTurnBoundary(root, turn, direction)) return false;
+            const turns = Array.from(turn.parentElement.parentElement.querySelectorAll(turnSelector));
+            const index = turns.indexOf(turn);
+            const relevant = direction < 0 ? turns.slice(0, index + 1) : turns.slice(index);
+            const another = items.some((item) => relevant.includes(item.img.closest(turnSelector)) &&
+                (item.turn === selected.turn ? (item.order - selected.order) * direction > 0 : true));
+            return !another;
+        }
+
+        // Shared structural check also works for text-only windows at the start of a scan.
+        function mountedTurnBoundary(root, turn, direction) {
+            if (!turn) return false;
+            const row = turn?.parentElement;
+            const block = row?.parentElement;
+            const extent = block?.parentElement;
+            const transcript = extent?.parentElement;
+            if (!transcript?.matches('[data-chatgpt-conversation-selection-target]') ||
+                !root.contains(transcript) || !extent.style.height || !block.style.marginTop) return false;
+            const turns = Array.from(block.querySelectorAll(turnSelector));
+            const index = turns.indexOf(turn);
+            if (index < 0 || turns.length !== block.children.length ||
+                turns.some((node, i) => node.parentElement !== block.children[i])) return false;
+            const bounds = extent.getBoundingClientRect();
+            const mountedBounds = block.getBoundingClientRect();
+            if (bounds.height <= 0 || mountedBounds.height <= 0) return false;
+            if (direction < 0) {
+                if (Math.abs(mountedBounds.top - bounds.top) > 2) return false;
+                // The pagination indicator sits before the extent, outside the turns.
+                for (const sibling of transcript.children) {
+                    if (sibling === extent) break;
+                    if (!sibling.hidden && sibling.getBoundingClientRect().height > 0) return false;
+                }
+            } else if (Math.abs(mountedBounds.bottom - bounds.bottom) > 2) return false;
+            const relevant = direction < 0 ? turns.slice(0, index + 1) : turns.slice(index);
+            if (relevant.some((node) => !node.querySelector('[data-talvt-turn-state="complete"]') ||
+                node.querySelector('[data-virtualized-turn-content], [aria-busy="true"], [role="progressbar"], ' +
+                    '[data-testid="generated-image-preview"]:not(:has(img))'))) return false;
+            return true;
+        }
+
         async function findNext(selected, direction, isCurrent) {
             if ((run && !run.navigation) || !isCurrent()) return null;
             const id = syncConversation();
             const root = timeline();
             const key = imageKeys.get(selected);
             if (!id || !root || !key || !isCurrent()) return null;
-            mounted();
-            if (knownEnds.get(direction) === key) return null;
+            const items = mounted();
+            if (knownEnds.get(direction) === key || mountedBoundary(root, key, direction, items)) return null;
             const record = records.get(key);
             const position = turnPositions.get(record?.turn);
             if (position === undefined) return null;

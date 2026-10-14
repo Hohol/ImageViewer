@@ -43,7 +43,7 @@ belongs in `support/`.
 | --- | --- |
 | Shared viewer navigation | Partial: cached navigation, ChatGPT search handoff, repeated keys, stale-result cancellation, basic non-ChatGPT fallback |
 | Gallery browser fullscreen | Mode transitions retain the overlay; failed entry, repeated requests, and closing in-page mode (mocked browser API) |
-| ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries, edited branches, long text spans |
+| ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries (including mounted-edge detection, full-scan completion without the extra pagination wait at confirmed starts, retention across older chunks/remounts, and pagination/incomplete-content guards), edited branches, long text spans, paired generated images regrouped into shared message containers and loaded in reverse order |
 | ChatGPT search-image cards | Excluded from clicks, navigation, and gallery capture; generated images and generic image/button components stay eligible |
 | ChatGPT SVG components | Marked SVG components are excluded; ordinary SVG images stay eligible |
 | ChatGPT navigation diagnostics | Detached images, turn changes, URL redaction, bounded logs, listener cleanup |
