@@ -16,7 +16,7 @@ function setup() {
   });
   const buttons = [button('image'), button('first', '0:10'), button('second', '1:02:03'), button('third', null, true)];
   selected = buttons[1];
-  const strip = { querySelectorAll: () => buttons, querySelector: () => selected };
+  const strip = { querySelectorAll: () => buttons, querySelector: () => buttons.includes(selected) ? selected : null };
   const context = {
     location: { pathname: '/imagine/post/example' }, isGrokHost: () => true,
     document: { querySelector: () => stripPresent ? strip : null },
@@ -43,6 +43,7 @@ function setup() {
     return event;
   }
   return { context, buttons, clicks, toasts, listeners, press, imageCalls: () => imageCalls,
+    select: btn => { selected = btn; },
     visited: () => vm.runInContext('Array.from(imagineVisitedVideos).sort().join(",")', context),
     removeStrip: () => { stripPresent = false; } };
 }
@@ -244,4 +245,79 @@ test('A/D navigate relative to a selected image and respect input guards', () =>
   h.removeStrip();
   h.press({ code: 'KeyD' });
   assert.deepEqual(h.clicks, ['image', 'first']);
+});
+
+test('all navigation methods skip removed videos and hidden deletion wrappers with live counts', () => {
+  for (const mode of ['page', 'fullscreen']) {
+    for (const removal of ['removed', 'hidden', 'hidden-wrapper']) {
+      for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }, { key: 'R' }]) {
+        const h = setup();
+        if (mode === 'fullscreen') h.context.document.fullscreenElement = { tagName: 'VIDEO' };
+        // Populate navigation state before deleting the middle video.
+        h.press({ code: 'KeyD' });
+        const middle = h.buttons[2];
+        if (removal === 'removed') h.buttons.splice(2, 1);
+        if (removal === 'hidden') middle.style.display = 'none';
+        if (removal === 'hidden-wrapper') middle.parentElement = { style: { display: 'none' } };
+        const backward = event.code === 'KeyA';
+        h.select(backward ? h.buttons.at(-1) : h.buttons[1]);
+        h.press(event);
+        assert.equal(h.clicks.at(-1), backward ? 'first' : 'third');
+        assert.deepEqual(h.toasts.at(-1), { message: backward ? '1/2' : '2/2', duration: 1000 });
+        h.context.showImagineVideoIndex();
+        assert.equal(h.toasts.at(-1).message, backward ? '1/2' : '2/2', 'hover shares the live count');
+      }
+    }
+  }
+});
+
+test('deleting the current video before a delayed URL update preserves visited history', () => {
+  const h = setup();
+  h.context.history.replaceState({}, '', '/imagine/post/first');
+  h.press({ key: 'R' });
+  const deletedName = h.clicks.at(-1);
+  h.context.history.replaceState({}, '', '/imagine/post/' + deletedName);
+  const visited = h.visited();
+  h.buttons.splice(h.buttons.findIndex(btn => btn.name === deletedName), 1);
+  h.select(h.buttons[1]); // Grok selects a survivor before replacing the old URL.
+  h.press({ code: 'KeyA' }); // Refresh navigation against the shrunken strip.
+  h.context.history.replaceState({}, '', '/imagine/post/first');
+  assert.equal(h.visited(), visited);
+  h.press({ key: 'R' });
+  assert.notEqual(h.clicks.at(-1), deletedName);
+  assert.equal(h.toasts.at(-1).message, '2/2');
+  h.press({ key: 'R' });
+  assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
+});
+
+test('deleting unvisited videos causes exhaustion without revisiting survivors', () => {
+  const h = setup();
+  h.press({ key: 'R' });
+  const chosen = h.clicks.at(-1);
+  const unvisitedIndex = h.buttons.findIndex(btn => btn.name !== 'image' && btn.name !== 'first' && btn.name !== chosen);
+  h.buttons.splice(unvisitedIndex, 1);
+  const count = h.clicks.length;
+  h.press({ key: 'R' });
+  assert.equal(h.clicks.length, count);
+  assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
+  h.press({ key: 'r' });
+  assert.equal(h.clicks.at(-1), 'first', 'ordinary random navigation remains available');
+});
+
+test('single and empty video lists after deletion are safe for every navigation method', () => {
+  const h = setup();
+  h.press({ key: 'R' });
+  h.buttons.splice(2);
+  h.select(h.buttons[1]);
+  const count = h.clicks.length;
+  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }, { key: 'R' }]) h.press(event);
+  assert.equal(h.clicks.length, count);
+  h.context.showImagineVideoIndex();
+  assert.equal(h.toasts.at(-1).message, '1/1');
+  h.buttons.splice(1);
+  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }, { key: 'R' }]) h.press(event);
+  assert.equal(h.clicks.length, count);
+  const toastCount = h.toasts.length;
+  h.context.showImagineVideoIndex();
+  assert.equal(h.toasts.length, toastCount, 'no invalid index toast after deleting all videos');
 });

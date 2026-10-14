@@ -3497,7 +3497,7 @@
     }
 
     const imagineVisitedVideos = new Set();
-    let imagineFilmstripMediaIds = new Set();
+    const imagineFilmstripMediaIds = new Set();
     let imagineVisitedPage = location.pathname;
 
     function resetImagineVisitedVideos() {
@@ -3542,6 +3542,10 @@
     function collectImagineVideoButtons(allButtons) {
         return allButtons.filter((btn) => {
             if (btn.disabled || btn.hidden || btn.style.display === 'none') return false;
+            // Deletion can hide the thumbnail's wrapper instead of removing the button.
+            for (let parent = btn.parentElement; parent; parent = parent.parentElement) {
+                if (parent.hidden || parent.style?.display === 'none') return false;
+            }
             // Video slides can render only an image thumbnail, with a duration badge.
             return !!btn.querySelector('video') || Array.from(btn.querySelectorAll('span')).some((span) =>
                 /^(?:\d+:)?\d+:\d{2}$/.test(span.textContent.trim()));
@@ -3564,7 +3568,12 @@
         const strip = imaginePostFilmstripScrollEl();
         if (!strip) return false;
         const allButtons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]'));
-        imagineFilmstripMediaIds = new Set(allButtons.map(imaginePostIdFromFilmstripButton).filter(Boolean));
+        // Keep removed IDs until page leave: Grok may update the deleted current
+        // post's URL only after the filmstrip has already changed.
+        for (const btn of allButtons) {
+            const id = imaginePostIdFromFilmstripButton(btn);
+            if (id) imagineFilmstripMediaIds.add(id);
+        }
         const buttons = collectImagineVideoButtons(allButtons);
         const selected = getImaginePostSelectedFilmstripButton();
         let target;
