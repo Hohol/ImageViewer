@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.35
-// @description  Improves image and video UI on ChatGPT, Gemini, and Grok.
+// @version      2.36
+// @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
 // @match        *://grok.com/*
 // @match        *://*.grok.com/*
 // @match        *://gemini.google.com/*
+// @match        file:///*
 // @exclude      *://chatgpt.com/library*
 // @exclude      *://*.chatgpt.com/library*
 // @exclude      *://grok.com/library*
@@ -28,8 +29,122 @@
         if (viewerKeydownHandler) viewerKeydownHandler(e);
     }, true);
 
+    // Local images use Chrome's directory document as the image index. This
+    // avoids fetching file: URLs or requiring a separate folder permission.
+    function localImageName(url) {
+        try { return decodeURIComponent(new URL(url).pathname.split('/').pop()); }
+        catch { return ''; }
+    }
+
+    function collectLocalImages(links, folder) {
+        const images = new Map();
+        for (const link of links) {
+            try {
+                const url = new URL(link.getAttribute('href'), folder);
+                if (url.protocol !== 'file:' || url.search || url.hash ||
+                    new URL('.', url).href !== folder) continue;
+                const name = localImageName(url.href);
+                if (!/\.(?:avif|apng|bmp|gif|ico|jpe?g|jfif|png|svg|webp)$/i.test(name)) continue;
+                images.set(url.href, { name, url: url.href });
+            } catch { /* Ignore invalid directory links. */ }
+        }
+        const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: false });
+        return [...images.values()].sort((a, b) =>
+            collator.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    }
+
+    function initLocalImageViewer() {
+        if (window.top !== window) return;
+        const current = new URL(location.href);
+        if (document.contentType?.startsWith('image/') && !current.pathname.endsWith('/')) {
+            const folder = new URL('.', current);
+            folder.hash = 'iv-image=' + encodeURIComponent(localImageName(current.href));
+            location.replace(folder.href);
+            return;
+        }
+        if (!current.pathname.endsWith('/') || !current.hash.startsWith('#iv-image=')) return;
+        const folder = new URL('.', current).href;
+        // Wait for all of Chrome's streamed directory rows before taking the index.
+        if (document.readyState !== 'complete') {
+            window.addEventListener('load', initLocalImageViewer, { once: true });
+            return;
+        }
+        const images = collectLocalImages(document.querySelectorAll('a[href]'), folder);
+        const selectedName = () => {
+            try { return decodeURIComponent(location.hash.slice('#iv-image='.length)); }
+            catch { return ''; }
+        };
+        let index = images.findIndex(image => image.name === selectedName());
+        const viewer = document.createElement('div');
+        viewer.id = 'iv-local-viewer';
+        viewer.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;color:#eee;display:flex;flex-direction:column;font:14px system-ui,sans-serif';
+        const stage = document.createElement('div');
+        stage.style.cssText = 'flex:1;min-height:0;display:flex;align-items:flex-start;justify-content:flex-start;overflow:auto';
+        const image = document.createElement('img');
+        image.style.cssText = 'display:block;flex-shrink:0;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;margin:auto;cursor:zoom-in';
+        stage.append(image);
+        viewer.append(stage);
+        document.body.append(viewer);
+        let nativeSize = false;
+        const toggleSize = () => {
+            nativeSize = !nativeSize;
+            image.style.maxWidth = nativeSize ? 'none' : '100%';
+            image.style.maxHeight = nativeSize ? 'none' : '100%';
+            image.style.cursor = nativeSize ? 'zoom-out' : 'zoom-in';
+            stage.scrollTop = 0;
+            stage.scrollLeft = 0;
+        };
+        image.addEventListener('click', toggleSize);
+        const render = () => {
+            if (index < 0) {
+                image.style.display = 'none';
+                document.title = 'Image not found — ImageViewer';
+                return;
+            }
+            image.style.display = 'block';
+            image.alt = images[index].name;
+            image.src = images[index].url;
+            stage.scrollTop = 0;
+            stage.scrollLeft = 0;
+            document.title = images[index].name + ' — ImageViewer';
+        };
+        image.addEventListener('error', () => {
+            if (index >= 0) document.title = `Cannot display ${images[index].name} — ImageViewer`;
+        });
+        const navigate = direction => {
+            const target = index + direction;
+            if (index < 0 || target < 0 || target >= images.length) return;
+            index = target;
+            history.replaceState(null, '', '#iv-image=' + encodeURIComponent(images[index].name));
+            render();
+        };
+        viewerKeydownHandler = e => {
+            if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+            if (e.code === 'Period') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                toggleSize();
+                return;
+            }
+            if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            navigate(e.key === 'ArrowLeft' ? -1 : 1);
+        };
+        window.addEventListener('hashchange', () => {
+            if (!location.hash.startsWith('#iv-image=')) { location.reload(); return; }
+            index = images.findIndex(item => item.name === selectedName());
+            render();
+        });
+        render();
+    }
+
     // Wait for DOM to be ready before checking
     function init() {
+        if (location.protocol === 'file:') {
+            initLocalImageViewer();
+            return;
+        }
         // Don't run on pages that are just a single image or video (Open in New Tab)
         if (document.body.children.length === 1) {
             const onlyChild = document.body.children[0];
