@@ -4,7 +4,8 @@ This tracked file contains shared project knowledge useful across machines. Keep
 
 ## Overview
 
-- This is a dependency-free userscript for Tampermonkey and Violentmonkey.
+- This is a dependency-free userscript.
+- The script was developed and tested only with Google Chrome and Tampermonkey. Some features might not work in other environments.
 - The shipped source is `ImageViewer.js`; there is no build step or package manager.
 - It runs on ChatGPT, Gemini, and Grok.
 - It augments these sites' interfaces in various ways, primarily to improve image and video viewing.
