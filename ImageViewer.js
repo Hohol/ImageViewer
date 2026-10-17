@@ -669,6 +669,9 @@
         let editingTurn = null;
         let turnOrder = [];
         let conversation = null;
+        let conversationPath = location.pathname;
+        let departedConversation = null;
+        let pageHidden = false;
         let generation = 0;
         let bytes = 0;
         let run = null;
@@ -694,6 +697,7 @@
                 run.cancelReason = reason;
                 log('reset', { reason, ...scanState(run) });
                 run.cancelled = true;
+                for (const controller of run.controllers) controller.abort();
             }
             passive.cancelled = true;
             for (const controller of passive.controllers) controller.abort();
@@ -714,7 +718,19 @@
         }
 
         function syncConversation() {
+            if (pageHidden) return null;
+            if (conversationPath !== location.pathname) {
+                departedConversation = conversation || departedConversation;
+                conversationPath = location.pathname;
+                reset('page-navigation');
+                conversation = null;
+            }
             const id = conversationId();
+            // SPA routes change before the old conversation DOM is removed.
+            // Do not repopulate the released cache from that outgoing timeline.
+            if (departedConversation && id === departedConversation &&
+                location.pathname.match(/\/c\/([^/]+)/)?.[1] !== id) return null;
+            if (id) departedConversation = null;
             if (id !== conversation) {
                 reset();
                 conversation = id;
@@ -1491,12 +1507,23 @@
             syncConversation();
             if (observeTimeline() || previous !== conversation) captureMounted();
         }, 1000);
+        for (const method of ['pushState', 'replaceState']) {
+            const original = history[method];
+            history[method] = function (...args) {
+                const result = original.apply(this, args);
+                syncConversation();
+                scheduleCapture();
+                return result;
+            };
+        }
+        window.addEventListener('popstate', () => { syncConversation(); scheduleCapture(); });
         window.addEventListener('pagehide', () => {
+            pageHidden = true;
             reset('pagehide'); conversation = null;
             observer.disconnect(); observedRoot = null;
             clearTimeout(captureTimer); captureTimer = null;
         });
-        window.addEventListener('pageshow', scheduleCapture);
+        window.addEventListener('pageshow', () => { pageHidden = false; scheduleCapture(); });
         captureMounted();
         return {
             scan, cancel, images, findNext, nearestImage,
