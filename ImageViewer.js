@@ -1959,6 +1959,8 @@
         if (isGrokHost() && !isGrokOptInImage(img)) return true;
         if (isGeminiHost() && !isGeminiOptInImage(img)) return true;
         if (isChatGPTProfileImage(img)) return true;
+        // The "Your dot" sidebar button renders its navigation icon as an image.
+        if (isChatGPTHost() && img.closest('[data-sidebar-destination="builtin:orbit"]')) return true;
         // Source citations include small site logos inside favicon components.
         if (isChatGPTHost() && img.closest('[data-d-component="favicon"]')) return true;
         // ChatGPT renders inline SVG components as images in rich responses.
