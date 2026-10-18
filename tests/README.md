@@ -51,7 +51,7 @@ belongs in `support/`.
 | Shared image eligibility | Common exclusions and ChatGPT generated-image exceptions agree for clicking and navigation |
 | Gemini integration | Inline generated images, lightbox images, source/markup eligibility, upload-preview exclusions |
 | Grok integration | Chat/Imagine image eligibility, hero/card layouts, filmstrip and other thumbnail exclusions; saved-media filters and deletion controls remain untested |
-| Imagine video navigation | r random selection, uppercase R unvisited selection and page-leave reset, A/D previous/next routing in page/fullscreen modes, no wrapping, image skipping, avoiding the current video, deletions and hidden wrappers, updated index totals, empty/single-video cases, typing and modifier guards (mocked DOM) |
+| Imagine video navigation | R random selection, lowercase r unvisited selection and page-leave reset, A/D previous/next routing in page/fullscreen modes, no wrapping, image skipping, avoiding the current video, deletions and hidden wrappers, updated index totals, empty/single-video cases, typing and modifier guards (mocked DOM) |
 | Other shared viewer features | No dedicated tests yet for fit/zoom, native browser fullscreen behavior, clipboard, new-tab opening, hotkeys, video controls, or loop export |
 
 ## Command-line checks

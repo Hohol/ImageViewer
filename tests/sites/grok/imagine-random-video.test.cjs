@@ -37,7 +37,7 @@ function setup() {
   vm.runInContext(readSection('grok/imagine-random-video'), context);
   context.bindImagineVisitedPageLifecycle();
   function press(overrides = {}) {
-    const event = { code: 'KeyR', target: {}, preventDefault() { this.prevented = true; },
+    const event = { code: 'KeyR', key: 'R', target: {}, preventDefault() { this.prevented = true; },
       stopImmediatePropagation() { this.stopped = true; }, ...overrides };
     context.handleViewerKeydown(event);
     return event;
@@ -66,26 +66,35 @@ test('Imagine R selects a different video in page, video fullscreen, and image o
   }
 });
 
-test('uppercase R includes the starting video, avoids repeats, and reports exhaustion', () => {
+test('lowercase r includes the starting video, avoids repeats, and reports exhaustion', () => {
   const h = setup();
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   assert.ok(h.visited().includes('first'));
   assert.equal(h.visited().split(',').length, 2);
   const firstPick = h.clicks[0];
   // A remounted thumbnail with the same media ID must still count as visited.
   h.buttons[1] = { ...h.buttons[1] };
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   assert.notEqual(h.clicks[1], firstPick);
   assert.equal(h.visited(), 'first,second,third');
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   assert.equal(h.clicks.length, 2);
   assert.deepEqual(h.toasts.at(-1), { message: 'No more unvisited videos', duration: 1000 });
 });
 
-test('Caps Lock selects unvisited videos even when the reported key is lowercase or localized', () => {
+test('Caps Lock uses ordinary random selection; lowercase and Caps Lock plus Shift select unvisited', () => {
   for (const key of ['r', 'R', 'К']) {
     const h = setup();
     const event = { key, getModifierState: modifier => modifier === 'CapsLock' };
+    for (let i = 0; i < 5; i++) h.press(event);
+    assert.equal(h.visited(), '');
+    assert.equal(h.clicks.length, 5);
+  }
+  for (const event of [
+    { key: 'r', getModifierState: () => false },
+    { key: 'r', shiftKey: true, getModifierState: modifier => modifier === 'CapsLock' },
+  ]) {
+    const h = setup();
     h.press(event);
     h.press(event);
     h.press(event);
@@ -94,35 +103,31 @@ test('Caps Lock selects unvisited videos even when the reported key is lowercase
     assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
   }
   const h = setup();
-  h.press({ key: 'r', getModifierState: () => false });
-  assert.equal(h.visited(), '');
-  h.press({ key: 'r', shiftKey: true, getModifierState: modifier => modifier === 'CapsLock' });
-  assert.equal(h.visited(), '', 'Caps Lock plus Shift produces lowercase');
   h.press({ key: 'R', shiftKey: true, getModifierState: () => false });
-  assert.notEqual(h.visited(), '', 'Shift+R also selects unvisited videos');
+  assert.equal(h.visited(), '', 'Shift+R uses ordinary random selection');
 });
 
-test('only uppercase R records visits; lowercase r still navigates after exhaustion', () => {
+test('only lowercase r records visits; uppercase R still navigates after exhaustion', () => {
   const h = setup();
-  for (const event of [{ code: 'KeyD' }, { code: 'KeyA' }, { key: 'r' }]) h.press(event);
+  for (const event of [{ code: 'KeyD' }, { code: 'KeyA' }, { key: 'R' }]) h.press(event);
   assert.equal(h.visited(), '');
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   const visited = h.visited();
   h.press({ code: 'KeyD' });
   h.press({ code: 'KeyA' });
-  h.press({ key: 'r' });
+  h.press({ key: 'R' });
   assert.equal(h.visited(), visited);
-  h.press({ key: 'R' });
-  h.press({ key: 'R' });
-  const count = h.clicks.length;
   h.press({ key: 'r' });
+  h.press({ key: 'r' });
+  const count = h.clicks.length;
+  h.press({ key: 'R' });
   assert.equal(h.clicks.length, count + 1);
 });
 
 test('visited videos reset on SPA page leave and pagehide, but survive same-page history updates', () => {
   for (const leave of ['pushState', 'replaceState', 'popstate', 'pagehide']) {
     const h = setup();
-    h.press({ key: 'R' });
+    h.press({ key: 'r' });
     const path = h.context.location.pathname;
     h.context.history.replaceState({}, '', path);
     assert.notEqual(h.visited(), '');
@@ -147,14 +152,14 @@ test('Grok replacing the post URL on filmstrip selection preserves visited video
       h.context.history.replaceState({}, '', '/imagine/post/' + btn.name);
     };
   }
-  h.press({ key: 'R', getModifierState: () => true });
+  h.press({ key: 'r', getModifierState: () => false });
   assert.equal(h.visited().split(',').length, 2, 'the selected post URL must not reset visits');
-  h.press({ key: 'R', getModifierState: () => true });
+  h.press({ key: 'r', getModifierState: () => false });
   assert.equal(h.visited(), 'first,second,third');
-  h.press({ key: 'R', getModifierState: () => true });
+  h.press({ key: 'r', getModifierState: () => false });
   assert.equal(h.clicks.length, 2);
   assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
-  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }]) {
+  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'R' }]) {
     h.press(event);
     assert.equal(h.visited(), 'first,second,third', 'other navigation must preserve the set');
   }
@@ -165,7 +170,7 @@ test('Grok replacing the post URL on filmstrip selection preserves visited video
 test('delayed post URL replacement and history traversal within the filmstrip preserve visits', () => {
   const h = setup();
   h.context.history.replaceState({}, '', '/imagine/post/first');
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   const visited = h.visited();
   h.context.history.replaceState({}, '', '/imagine/post/' + h.clicks.at(-1));
   assert.equal(h.visited(), visited);
@@ -250,7 +255,7 @@ test('A/D navigate relative to a selected image and respect input guards', () =>
 test('all navigation methods skip removed videos and hidden deletion wrappers with live counts', () => {
   for (const mode of ['page', 'fullscreen']) {
     for (const removal of ['removed', 'hidden', 'hidden-wrapper']) {
-      for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }, { key: 'R' }]) {
+      for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'R' }, { key: 'r' }]) {
         const h = setup();
         if (mode === 'fullscreen') h.context.document.fullscreenElement = { tagName: 'VIDEO' };
         // Populate navigation state before deleting the middle video.
@@ -274,7 +279,7 @@ test('all navigation methods skip removed videos and hidden deletion wrappers wi
 test('deleting the current video before a delayed URL update preserves visited history', () => {
   const h = setup();
   h.context.history.replaceState({}, '', '/imagine/post/first');
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   const deletedName = h.clicks.at(-1);
   h.context.history.replaceState({}, '', '/imagine/post/' + deletedName);
   const visited = h.visited();
@@ -283,39 +288,39 @@ test('deleting the current video before a delayed URL update preserves visited h
   h.press({ code: 'KeyA' }); // Refresh navigation against the shrunken strip.
   h.context.history.replaceState({}, '', '/imagine/post/first');
   assert.equal(h.visited(), visited);
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   assert.notEqual(h.clicks.at(-1), deletedName);
   assert.equal(h.toasts.at(-1).message, '2/2');
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
 });
 
 test('deleting unvisited videos causes exhaustion without revisiting survivors', () => {
   const h = setup();
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   const chosen = h.clicks.at(-1);
   const unvisitedIndex = h.buttons.findIndex(btn => btn.name !== 'image' && btn.name !== 'first' && btn.name !== chosen);
   h.buttons.splice(unvisitedIndex, 1);
   const count = h.clicks.length;
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   assert.equal(h.clicks.length, count);
   assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
-  h.press({ key: 'r' });
+  h.press({ key: 'R' });
   assert.equal(h.clicks.at(-1), 'first', 'ordinary random navigation remains available');
 });
 
 test('single and empty video lists after deletion are safe for every navigation method', () => {
   const h = setup();
-  h.press({ key: 'R' });
+  h.press({ key: 'r' });
   h.buttons.splice(2);
   h.select(h.buttons[1]);
   const count = h.clicks.length;
-  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }, { key: 'R' }]) h.press(event);
+  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'R' }, { key: 'r' }]) h.press(event);
   assert.equal(h.clicks.length, count);
   h.context.showImagineVideoIndex();
   assert.equal(h.toasts.at(-1).message, '1/1');
   h.buttons.splice(1);
-  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'r' }, { key: 'R' }]) h.press(event);
+  for (const event of [{ code: 'KeyA' }, { code: 'KeyD' }, { key: 'R' }, { key: 'r' }]) h.press(event);
   assert.equal(h.clicks.length, count);
   const toastCount = h.toasts.length;
   h.context.showImagineVideoIndex();

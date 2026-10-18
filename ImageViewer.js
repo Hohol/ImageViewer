@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.36
+// @version      2.37
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -2877,8 +2877,8 @@
             title: 'Imagine videos',
             items: [
                 ['A / D', 'Previous / next video'],
-                ['r', 'Random video'],
-                ['R', 'Random unvisited video'],
+                ['r', 'Random unvisited video'],
+                ['R', 'Random video'],
             ],
         },
         {
@@ -5709,7 +5709,7 @@
                 e.stopImmediatePropagation();
                 // Some keyboard layouts report lowercase even with Caps Lock enabled.
                 const uppercase = e.key === 'R' || (!!e.getModifierState?.('CapsLock') && !e.shiftKey);
-                navigateImagineVideo(0, uppercase);
+                navigateImagineVideo(0, !uppercase);
                 return;
             }
             const fsEl =
