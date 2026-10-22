@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.37
+// @version      2.38
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -118,19 +118,146 @@
             history.replaceState(null, '', '#iv-image=' + encodeURIComponent(images[index].name));
             render();
         };
+        let help = null;
+        let helpDismissKey = null;
+        let modifierTap = null;
+        let fullscreenBusy = false;
+        let scrollFrame = null;
+        let scrollTime = 0;
+        const scrollKeys = new Set();
+        const stopScroll = () => {
+            scrollKeys.clear();
+            if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
+            scrollFrame = null;
+            scrollTime = 0;
+        };
+        const scrollTick = now => {
+            if (!nativeSize || help || !scrollKeys.size) { stopScroll(); return; }
+            const direction = Number(scrollKeys.has('ArrowDown')) - Number(scrollKeys.has('ArrowUp'));
+            if (scrollTime) stage.scrollTop += direction * 720 * Math.min((now - scrollTime) / 1000, 0.05);
+            scrollTime = now;
+            scrollFrame = requestAnimationFrame(scrollTick);
+        };
+        const showHelp = () => {
+            stopScroll();
+            help = document.createElement('div');
+            help.id = 'iv-local-help';
+            help.setAttribute('role', 'dialog');
+            help.setAttribute('aria-modal', 'true');
+            help.setAttribute('aria-label', 'Local image shortcuts');
+            help.tabIndex = -1;
+            help.style.cssText = 'position:absolute;inset:0;background:#000b;display:flex;align-items:center;justify-content:center;z-index:1';
+            const panel = document.createElement('div');
+            panel.style.cssText = 'background:#18181b;padding:24px;border-radius:14px;max-height:85%;overflow:auto;line-height:1.8';
+            const heading = document.createElement('strong');
+            heading.textContent = 'Local image shortcuts';
+            panel.append(heading);
+            const entries = [
+                ['← / ⌘ / Alt', 'Previous image (⌘ and Alt pressed alone)'],
+                ['→ / Space', 'Next image'],
+                ['↑ / ↓', 'Scroll in native-resolution mode'],
+                ['. / Click image', 'Toggle fit / native resolution'],
+                ['R', 'Random different image'],
+                ['B / F / /', 'Toggle browser fullscreen'],
+                ['Esc', 'Exit fullscreen; otherwise return to folder'],
+                ['H', 'Show this help'],
+            ];
+            for (const [keys, description] of entries) {
+                const row = document.createElement('div');
+                const label = document.createElement('b');
+                label.textContent = keys + ' — ';
+                row.append(label, document.createTextNode(description));
+                panel.append(row);
+            }
+            const hint = document.createElement('div');
+            hint.textContent = 'Press any unmodified key or click to dismiss.';
+            panel.append(hint);
+            help.append(panel);
+            help.addEventListener('click', closeHelp);
+            viewer.append(help);
+            help.focus();
+        };
+        const closeHelp = () => {
+            help?.remove();
+            help = null;
+            stage.focus({ preventScroll: true });
+        };
+        stage.tabIndex = -1;
+        stage.style.outline = 'none';
+        const toggleFullscreen = async () => {
+            if (fullscreenBusy) return;
+            fullscreenBusy = true;
+            stopScroll();
+            try {
+                if (document.fullscreenElement) await document.exitFullscreen();
+                else await viewer.requestFullscreen();
+            } catch (error) {
+                console.warn('[ImageViewer] Local fullscreen failed:', error);
+            } finally {
+                fullscreenBusy = false;
+            }
+        };
+        const consume = e => { e.preventDefault(); e.stopImmediatePropagation(); };
         viewerKeydownHandler = e => {
-            if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-            if (e.code === 'Period') {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                toggleSize();
+            if (e.code === helpDismissKey) { consume(e); return; }
+            // Wait for modifier release so Cmd+C, Alt+Left, etc. never navigate.
+            const modifier = e.key === 'Meta' || e.key === 'Alt';
+            if (modifier && !e.repeat) {
+                modifierTap = !help && !e.isComposing && !e.ctrlKey && !e.shiftKey &&
+                    !(e.key === 'Meta' ? e.altKey : e.metaKey) ? e.key : null;
                 return;
             }
-            if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            navigate(e.key === 'ArrowLeft' ? -1 : 1);
+            if (!modifier) modifierTap = null;
+            if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+            if (help) {
+                consume(e);
+                if (!e.repeat) { helpDismissKey = e.code; closeHelp(); }
+                return;
+            }
+            if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+            const code = e.code;
+            if (!['Period', 'KeyR', 'KeyH', 'KeyB', 'KeyF', 'Slash', 'Escape',
+                'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(code)) return;
+            consume(e);
+            if (code === 'ArrowUp' || code === 'ArrowDown') {
+                if (nativeSize && stage.scrollHeight > stage.clientHeight) {
+                    scrollKeys.add(code);
+                    if (scrollFrame === null) scrollFrame = requestAnimationFrame(scrollTick);
+                }
+                return;
+            }
+            if (code === 'ArrowLeft') { navigate(-1); return; }
+            if (code === 'ArrowRight' || code === 'Space') { navigate(1); return; }
+            if (e.repeat) return;
+            if (code === 'Period') { stopScroll(); toggleSize(); }
+            else if (code === 'KeyH') showHelp();
+            else if (code === 'KeyR' && images.length > 1 && index >= 0) {
+                const pick = Math.floor(Math.random() * (images.length - 1));
+                navigate((pick >= index ? pick + 1 : pick) - index);
+            } else if (code === 'Escape') {
+                stopScroll();
+                if (document.fullscreenElement) void toggleFullscreen();
+                else location.assign(folder);
+            } else if (['KeyB', 'KeyF', 'Slash'].includes(code)) void toggleFullscreen();
         };
+        window.addEventListener('keyup', e => {
+            if (e.code === helpDismissKey) helpDismissKey = null;
+            if (e.key === modifierTap) {
+                modifierTap = null;
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !help && !e.isComposing) {
+                    consume(e);
+                    navigate(-1);
+                }
+            }
+            scrollKeys.delete(e.code);
+            if (!scrollKeys.size) stopScroll();
+        }, true);
+        window.addEventListener('blur', () => { modifierTap = null; helpDismissKey = null; stopScroll(); });
+        window.addEventListener('pagehide', stopScroll);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) { modifierTap = null; stopScroll(); }
+        });
+        document.addEventListener('fullscreenchange', stopScroll);
         window.addEventListener('hashchange', () => {
             if (!location.hash.startsWith('#iv-image=')) { location.reload(); return; }
             index = images.findIndex(item => item.name === selectedName());
