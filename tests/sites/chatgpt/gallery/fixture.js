@@ -24,11 +24,11 @@ function isChatGPTHost() { return true; }
 function isGrokHost() { return false; }
 function isGeminiHost() { return false; }
 function clearOverlay() { overlay = null; }
-function hideFullscreen() { overlay = null; }
+function hideGallery() { overlay = null; }
 function hideViewerHotkeysModal() {}
 function showViewerToast(message) { events.push({ event: 'toast', message }); }
 function hideViewerToast(message) { events.push({ event: 'hide-toast', message }); }
-function ivLogFullscreenClipboard() {}
+function ivLogImageClipboard() {}
 async function clipboardPngBlobFromImageElement(img) {
   const canvas = document.createElement('canvas');
   canvas.width = img.naturalWidth;

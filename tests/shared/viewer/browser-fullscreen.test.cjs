@@ -51,7 +51,7 @@ test('browser fullscreen toggles preserve the gallery and in-page closing avoids
   release();
   await entering;
   await context.toggleGalleryBrowserFullscreen();
-  context.hideFullscreen();
+  context.hideGallery();
   assert.equal(context.overlay, null);
   assert.equal(resyncs, 0);
 });

@@ -23,7 +23,7 @@ function setup() {
     overlay: null, ivChatGPTGallery: null,
     viewerHotkeysModalBlocksKeydown: () => false,
     isKeyboardTypingTarget: target => target.typing,
-    hideFullscreen: () => { context.overlay = null; },
+    hideGallery: () => { context.overlay = null; },
     showViewerToast: (message, duration) => { toasts.push({ message, duration }); },
     imaginePostIdFromFilmstripButton: btn => btn.name,
     window: { addEventListener: (name, fn) => { listeners[name] = fn; } },

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.40
+// @version      2.41
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -685,11 +685,11 @@
         return true;
     }
 
-    /** true: DevTools console logs each step of copy-to-clipboard (C in image fullscreen). Set false normally. */
-    const IV_FULLSCREEN_CLIPBOARD_DEBUG = false;
+    /** true: DevTools console logs each step of copy-to-clipboard (C on the page or in gallery mode). Set false normally. */
+    const IV_IMAGE_CLIPBOARD_DEBUG = false;
 
-    function ivLogFullscreenClipboard(message, detail) {
-        if (!IV_FULLSCREEN_CLIPBOARD_DEBUG) return;
+    function ivLogImageClipboard(message, detail) {
+        if (!IV_IMAGE_CLIPBOARD_DEBUG) return;
         if (detail !== undefined) {
             console.log('[ImageViewer] clipboard', message, detail);
         } else {
@@ -1419,7 +1419,7 @@
             const id = syncConversation();
             const root = timeline();
             if (!id || !root) { showViewerToast('Open a ChatGPT conversation first'); return; }
-            if (overlay) { hideFullscreen(); clearOverlay(); }
+            if (overlay) { hideGallery(); clearOverlay(); }
             hideViewerHotkeysModal();
             const panel = document.createElement('div');
             panel.id = 'iv-chatgpt-scan';
@@ -2152,7 +2152,7 @@
         stopOverlayArrowScroll();
         stopCursorAutoHide();
         overlayNativeScrollBySrc.clear();
-        overlay.removeEventListener('click', hideFullscreen);
+        overlay.removeEventListener('click', hideGallery);
         overlay.remove();
         overlay = null;
         galleryInPage = false;
@@ -2221,13 +2221,13 @@
         }
     }
 
-    function hideFullscreen() {
+    function hideGallery() {
         const doc = document;
         const apiFs = isFullscreenApiActive(doc);
         const hadOverlay = !!overlay;
         const docEl = document.documentElement;
 
-        ivLogFullscreenExit('hideFullscreen', { apiFs, hadOverlay });
+        ivLogFullscreenExit('hideGallery', { apiFs, hadOverlay });
         ivIntentionalFullscreenExit = true;
         ivPendingVisualFullscreenExit = false;
 
@@ -2261,7 +2261,7 @@
             return;
         }
         ivChatGPTNavigationDebug?.record('scroll-to-image');
-        hideFullscreen();
+        hideGallery();
         setTimeout(() => imgEl?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
     }
 
@@ -2293,7 +2293,7 @@
                 canvas.toBlob((b) => resolve(b || null), 'image/png');
             });
         } catch (e) {
-            ivLogFullscreenClipboard('canvas→blob threw', { name: e && e.name, message: e && e.message });
+            ivLogImageClipboard('canvas→blob threw', { name: e && e.name, message: e && e.message });
             return null;
         }
     }
@@ -2318,85 +2318,85 @@
                 });
             }
         } catch (e) {
-            ivLogFullscreenClipboard('imageBlobToPngBlob threw', { name: e && e.name, message: e && e.message });
+            ivLogImageClipboard('imageBlobToPngBlob threw', { name: e && e.name, message: e && e.message });
         }
         return null;
     }
 
-    /** Copy the image currently shown in the fullscreen overlay (same pipeline as fetch → PNG for Chromium). */
-    async function copyFullscreenOverlayImageToClipboard(imgEl) {
-        ivLogFullscreenClipboard('start', {
+    /** Copy a page or gallery image to the clipboard as PNG for Chromium. */
+    async function copyImageToClipboard(imgEl) {
+        ivLogImageClipboard('start', {
             isSecureContext: typeof window !== 'undefined' ? window.isSecureContext : null,
             hasClipboardWrite: !!(navigator.clipboard && navigator.clipboard.write),
             hasClipboardItem: typeof ClipboardItem !== 'undefined'
         });
         if (!imgEl || typeof navigator === 'undefined' || !navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-            ivLogFullscreenClipboard('abort: clipboard API missing');
+            ivLogImageClipboard('abort: clipboard API missing');
             showViewerToast('Copy not supported');
             return;
         }
         const rawUrl = imgEl.currentSrc || imgEl.getAttribute('src') || imgEl.src || '';
         if (!rawUrl) {
-            ivLogFullscreenClipboard('abort: no URL on img');
+            ivLogImageClipboard('abort: no URL on img');
             showViewerToast('Copy failed');
             return;
         }
         showViewerToast('Copying image…', 30000);
         const url = getFullSizeGoogleUrl(rawUrl);
-        ivLogFullscreenClipboard('urls', { raw: rawUrl.length > 200 ? rawUrl.slice(0, 200) + '\u2026' : rawUrl, resolved: url.length > 200 ? url.slice(0, 200) + '\u2026' : url });
+        ivLogImageClipboard('urls', { raw: rawUrl.length > 200 ? rawUrl.slice(0, 200) + '\u2026' : rawUrl, resolved: url.length > 200 ? url.slice(0, 200) + '\u2026' : url });
         let blob = null;
         let mime = 'image/png';
 
         if (url.startsWith('blob:')) {
             blob = await clipboardPngBlobFromImageElement(imgEl);
-            ivLogFullscreenClipboard('strategy blob URL', { via: 'canvas (fetch blocked by page CSP)', size: blob ? blob.size : 0 });
+            ivLogImageClipboard('strategy blob URL', { via: 'canvas (fetch blocked by page CSP)', size: blob ? blob.size : 0 });
         } else {
             try {
                 let res = await fetch(url, { mode: 'cors', credentials: 'include', cache: 'no-store' });
-                ivLogFullscreenClipboard('fetch include', { ok: res.ok, status: res.status, type: res.type });
+                ivLogImageClipboard('fetch include', { ok: res.ok, status: res.status, type: res.type });
                 if (!res.ok) {
                     res = await fetch(url, { mode: 'cors', credentials: 'omit', cache: 'no-store' });
-                    ivLogFullscreenClipboard('fetch omit', { ok: res.ok, status: res.status, type: res.type });
+                    ivLogImageClipboard('fetch omit', { ok: res.ok, status: res.status, type: res.type });
                 }
                 if (res.ok) blob = await res.blob();
             } catch (e) {
-                ivLogFullscreenClipboard('fetch threw', { name: e && e.name, message: e && e.message });
+                ivLogImageClipboard('fetch threw', { name: e && e.name, message: e && e.message });
             }
             if (!blob || blob.size === 0) {
                 blob = await clipboardPngBlobFromImageElement(imgEl);
-                ivLogFullscreenClipboard('strategy after fetch failed', { via: 'canvas fallback', size: blob ? blob.size : 0 });
+                ivLogImageClipboard('strategy after fetch failed', { via: 'canvas fallback', size: blob ? blob.size : 0 });
             } else {
                 mime = blob.type && /^image\//i.test(blob.type) ? blob.type : 'image/png';
             }
         }
 
         if (!blob || blob.size === 0) {
-            ivLogFullscreenClipboard('abort: no blob', { blob: !!blob, size: blob ? blob.size : 0 });
+            ivLogImageClipboard('abort: no blob', { blob: !!blob, size: blob ? blob.size : 0 });
             showViewerToast('Copy failed');
             return;
         }
         if (mime !== 'image/png') {
             const png = await imageBlobToPngBlob(blob);
             if (png && png.size) {
-                ivLogFullscreenClipboard('re-encoded for clipboard', { from: mime, to: 'image/png', size: png.size });
+                ivLogImageClipboard('re-encoded for clipboard', { from: mime, to: 'image/png', size: png.size });
                 blob = png;
                 mime = 'image/png';
             } else {
                 const fromEl = await clipboardPngBlobFromImageElement(imgEl);
                 if (fromEl && fromEl.size) {
-                    ivLogFullscreenClipboard('re-encode failed; used canvas from img', { size: fromEl.size });
+                    ivLogImageClipboard('re-encode failed; used canvas from img', { size: fromEl.size });
                     blob = fromEl;
                     mime = 'image/png';
                 }
             }
         }
-        ivLogFullscreenClipboard('blob', { size: blob.size, mime: mime });
+        ivLogImageClipboard('blob', { size: blob.size, mime: mime });
         try {
             await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
-            ivLogFullscreenClipboard('clipboard.write OK');
+            ivLogImageClipboard('clipboard.write OK');
             showViewerToast('Image copied to clipboard');
         } catch (e) {
-            ivLogFullscreenClipboard('clipboard.write failed', { name: e && e.name, message: e && e.message });
+            ivLogImageClipboard('clipboard.write failed', { name: e && e.name, message: e && e.message });
             showViewerToast('Copy failed');
         }
     }
@@ -2609,11 +2609,11 @@
 
         const next = pickRandomIndex(list.length, -1);
         if (next < 0) return false;
-        showFullscreen(list[next]);
+        showGallery(list[next]);
         return true;
     }
 
-    function showFullscreen(img) {
+    function showGallery(img) {
         if (ivChatGPTGallery?.scanning) return;
         if (!img || isExcludedImage(img)) return;
         ivContextMenuInFullscreen = false;
@@ -2626,15 +2626,15 @@
         currentIndex = imgs.findIndex(imgEl => key ? ivChatGPTGallery.key(imgEl) === key : imgEl.src === img.src);
         if (currentIndex < 0) currentIndex = 0;
 
-        ivLogFullscreenExit('showFullscreen');
+        ivLogFullscreenExit('showGallery');
         // Enter browser fullscreen
         const docEl = document.documentElement;
         const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
         requestFn?.call(docEl);
 
-        if (!document.getElementById('iv-image-fullscreen-chrome')) {
+        if (!document.getElementById('iv-gallery-chrome')) {
             const s = document.createElement('style');
-            s.id = 'iv-image-fullscreen-chrome';
+            s.id = 'iv-gallery-chrome';
             s.textContent =
                 'html:fullscreen,html:-webkit-full-screen,html:-moz-full-screen{outline:none!important;box-shadow:none!important}' +
                 '.iv-overlay-native{scrollbar-width:none;-ms-overflow-style:none}' +
@@ -2684,7 +2684,7 @@
         overlay.appendChild(scrollBtn);
 
         // Close overlay on click
-        overlay.addEventListener('click', hideFullscreen);
+        overlay.addEventListener('click', hideGallery);
         // Fixed navigation controls can otherwise intercept trackpad/wheel scrolling.
         overlay.addEventListener('wheel', onOverlayWheel, { capture: true, passive: false });
         document.body.appendChild(overlay);
@@ -2727,7 +2727,7 @@
     document.addEventListener('click', e => {
         if (!overlay && e.button === 0) {
             const img = imageFromEventTarget(e.target);
-            if (img) showFullscreen(img);
+            if (img) showGallery(img);
         }
     }, true);
 
@@ -2763,7 +2763,7 @@
         if (e.key === 'Escape') {
             e.preventDefault();
             e.stopImmediatePropagation();
-            hideFullscreen();
+            hideGallery();
             return;
         }
         if (
@@ -2772,7 +2772,7 @@
         ) {
             e.preventDefault();
             e.stopImmediatePropagation();
-            if (overlayImage) void copyFullscreenOverlayImageToClipboard(overlayImage);
+            if (overlayImage) void copyImageToClipboard(overlayImage);
             return;
         }
         if (e.code === 'KeyT' && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -2997,10 +2997,10 @@
             title: 'General',
             items: [
                 ['H', 'Show keyboard shortcuts'],
-                ['F or /', 'Fullscreen image or video (exit image fullscreen)'],
+                ['F or /', 'Toggle image gallery or video fullscreen'],
                 ['R', 'Random image (outside Imagine)'],
-                ['T', 'Open image in new tab (page or fullscreen)'],
-                ['C', 'Copy image to clipboard (page or fullscreen)'],
+                ['T', 'Open image in new tab (page or gallery)'],
+                ['C', 'Copy image to clipboard (page or gallery)'],
             ],
         },
         {
@@ -3025,7 +3025,7 @@
             ],
         },
         {
-            title: 'Image fullscreen',
+            title: 'Gallery mode',
             items: [
                 ['Esc', 'Close'],
                 ['B', 'Toggle browser fullscreen (show / hide browser tabs)'],
@@ -3882,7 +3882,7 @@
             target = buttons[pickRandomIndex(buttons.length, buttons.indexOf(selected))];
         }
         if (!target || target === selected) return false;
-        if (overlay) hideFullscreen();
+        if (overlay) hideGallery();
         // Let Grok update its hero player, including its existing fullscreen video.
         target.click();
         showImagineVideoIndex(target, buttons);
@@ -5784,7 +5784,7 @@
         }
     }
 
-    // Keyboard shortcuts for the viewer: video controls, image fullscreen (F), overlay vs video routing
+    // Keyboard shortcuts for the viewer: video controls, gallery mode (F), overlay vs video routing
     function handleViewerKeydown(e) {
         if (viewerHotkeysModalBlocksKeydown(e)) return;
         if (e.isComposing || e.keyCode === 229) return;
@@ -5820,7 +5820,7 @@
             return;
         }
 
-        // F or / to toggle video fullscreen (plain keys only — not Cmd/Ctrl/Alt+F so Find/search works)
+        // F or / to toggle gallery mode or video fullscreen (plain keys only — not Cmd/Ctrl/Alt+F so Find/search works)
         if (e.code === 'KeyF' || e.code === 'Slash') {
             if (e.metaKey || e.ctrlKey || e.altKey) {
                 return;
@@ -5831,7 +5831,7 @@
             if (overlay) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                hideFullscreen();
+                hideGallery();
                 return;
             }
             if (document.querySelectorAll('video').length > 0) {
@@ -5853,7 +5853,7 @@
             if (img) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                showFullscreen(img);
+                showGallery(img);
             }
             return;
         }
@@ -5920,7 +5920,7 @@
             if (img) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                void copyFullscreenOverlayImageToClipboard(img);
+                void copyImageToClipboard(img);
             }
             return;
         }
