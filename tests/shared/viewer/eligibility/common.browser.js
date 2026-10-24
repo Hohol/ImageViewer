@@ -23,6 +23,13 @@ Promise.resolve().then(() => {
   expectEligibility(generated, true, 'ChatGPT generated-image exception is preserved');
   check(imageFromEventTarget(samples.querySelector('span')) === generated,
     'clicking the generated-image button resolves its eligible image');
+  const picker = sample('<div role="group" aria-label="Generated images" class="flex flex-col gap-2">' +
+    '<button aria-label="Show generated image 2"><img><span>Select</span></button></div>');
+  expectEligibility(picker, true, 'ChatGPT picker includes the unselected generated image');
+  check(imageFromEventTarget(samples.querySelector('span')) === picker,
+    'clicking a picker button resolves its eligible image');
+  expectEligibility(sample('<div class="flex flex-col gap-2"><button aria-label="Show generated image 2"><img></button></div>'),
+    false, 'picker exception requires the generated-images group');
   // An explicit generated preview must not bypass exclusions such as feedback UI.
   expectEligibility(sample('<div class="backdrop-blur-md"><button data-testid="generated-image-preview"><img></button></div>'),
     false, 'generated-image marker does not override feedback exclusion');

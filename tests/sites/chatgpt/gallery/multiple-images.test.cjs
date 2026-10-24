@@ -13,10 +13,14 @@ test('two generated images keep distinct identities when messages are grouped an
   const owner = ids => ({ getAttribute: name => name === 'data-chatgpt-search-message-ids' ? ids : null,
     querySelectorAll: () => nodes.filter(img => img.owner === owners.get(ids)) });
   const owners = new Map();
-  const image = (ids, name) => {
+  const image = (ids, name, picker = false) => {
     if (!owners.has(ids)) owners.set(ids, owner(ids));
     return { name, owner: owners.get(ids), closest(selector) {
-      return selector.includes('generated-image-preview') ? { getAttribute: () => 'Generated image ' + (name === 'first' ? 1 : 2) } : this.owner;
+      if (selector.includes('generated-image-preview')) {
+        if (picker && !selector.includes('Show generated image')) return null;
+        return { getAttribute: () => (picker ? 'Show generated image ' : 'Generated image ') + (name === 'first' ? 1 : 2) };
+      }
+      return this.owner;
     }, getBoundingClientRect: () => ({ top: 0, height: 100 }) };
   };
   const context = { timeline: () => root, turnSelector: '[data-turn-key]', turnKey: () => 'turn',
@@ -58,4 +62,22 @@ test('two generated images keep distinct identities when messages are grouped an
   nodes = [image('message-a', 'first'), image('message-b', 'second')];
   cache();
   assert.equal(context.images().length, 2, 'splitting the group again does not duplicate pictures');
+  // A selected large preview followed by the complete right-hand picker.
+  for (const selected of ['first', 'second']) {
+    nodes = [image('message-a message-b', selected),
+      image('message-a message-b', 'first', true), image('message-a message-b', 'second', true)];
+    const mounted = context.mounted();
+    assert.deepEqual(Array.from(mounted, item => item.img.name), ['first', 'second'],
+      'mounted navigation and boundaries follow image order');
+    assert.equal(mounted.length, 2, 'capture each image once, including the unselected picker image');
+    assert.equal(context.imageKeys.get(nodes[0]),
+      context.imageKeys.get(nodes[selected === 'first' ? 1 : 2]), 'clicks share the preview identity');
+    cache();
+    assert.deepEqual(Array.from(context.images(), img => img.name), ['first', 'second'],
+      'changing the large preview preserves gallery order without duplicates');
+  }
+  nodes = [image('message-a message-b', 'second', true)];
+  assert.equal(context.mounted()[0].key, JSON.stringify(['turn', 'message-b', 0]),
+    'a picker image loading first retains its numbered identity');
+
 });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.38
+// @version      2.39
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1018,19 +1018,22 @@
             for (const turn of turns) {
                 const slots = new Map();
                 const groupedImages = new Map();
+                const groupOrders = new Map();
+                const seen = new Set();
                 let order = 0;
                 for (const img of turn.querySelectorAll('img')) {
                     const owner = img.closest('[data-chatgpt-search-message-ids], [data-message-id]');
                     let message = owner?.getAttribute('data-chatgpt-search-message-ids') ||
                         owner?.getAttribute('data-message-id') || turnKey(turn);
+                    let itemOrder;
                     let slot = slots.get(message) || 0;
                     slots.set(message, slot + 1);
                     const messageIds = [...new Set(message.trim().split(/\s+/))];
-                    if (owner && messageIds.length > 1 && img.closest('button[data-testid="generated-image-preview"]')) {
+                    if (owner && messageIds.length > 1 && img.closest('button[data-testid="generated-image-preview"], [role="group"][aria-label="Generated images"] button[aria-label^="Show generated image "]')) {
                         if (!groupedImages.has(owner)) {
                             groupedImages.set(owner, Array.from(owner.querySelectorAll('img')).filter((node) =>
                                 node.closest('[data-chatgpt-search-message-ids], [data-message-id]') === owner &&
-                                node.closest('button[data-testid="generated-image-preview"]')));
+                                node.closest('button[data-testid="generated-image-preview"], [role="group"][aria-label="Generated images"] button[aria-label^="Show generated image "]')));
                         }
                         const group = groupedImages.get(owner);
                         // Parallel generated messages share one wrapper in the two-column
@@ -1038,13 +1041,18 @@
                         // Images can mount out of order: image 2 may be the only
                         // <img> present while image 1 is still loading. Its preview
                         // number remains stable throughout that transition.
-                        const preview = img.closest('button[data-testid="generated-image-preview"]');
-                        const number = preview.getAttribute('aria-label')?.match(/^Generated image (\d+)$/i);
+                        const preview = img.closest('button[data-testid="generated-image-preview"], [role="group"][aria-label="Generated images"] button[aria-label^="Show generated image "]');
+                        const number = preview.getAttribute('aria-label')?.match(/^(?:Show )?Generated image (\d+)$/i);
                         const index = number ? Number(number[1]) - 1 :
                             group.length === messageIds.length ? group.indexOf(img) : -1;
                         // Do not cache an ambiguous temporary identity that would
                         // become a duplicate once the other image mounts.
                         if (index < 0 || index >= messageIds.length) continue;
+                        if (!groupOrders.has(owner)) {
+                            groupOrders.set(owner, order);
+                            order += messageIds.length;
+                        }
+                        itemOrder = groupOrders.get(owner) + index;
                         message = messageIds[index];
                         slot = 0;
                     }
@@ -1052,13 +1060,21 @@
                     const key = JSON.stringify([turnKey(turn), message, slot]);
                     if (discardedImages.get(img) === key) continue;
                     imageKeys.set(img, key);
+                    // The picker and large preview represent the same generated image.
+                    // Assign both nodes the key for clicks, but capture it only once.
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    itemOrder ??= order++;
                     const rect = img.getBoundingClientRect();
                     const position = distance - (rect.top + rect.height / 2 - top);
                     const record = records.get(key);
-                    if (record) { record.position = position; record.order = order; }
-                    result.push({ key, turn: turnKey(turn), order: order++, img, position });
+                    if (record) { record.position = position; record.order = itemOrder; }
+                    result.push({ key, turn: turnKey(turn), order: itemOrder, img, position });
                 }
             }
+            // A selected second preview can precede the first picker image in the DOM.
+            const ranks = new Map(turns.map((turn, index) => [turnKey(turn), index]));
+            result.sort((a, b) => ranks.get(a.turn) - ranks.get(b.turn) || a.order - b.order);
             rememberMountedEnds(root, result);
             return result;
         }
@@ -1835,7 +1851,7 @@
         if (el.tagName !== 'IMG') {
             // Fresh ChatGPT results can target the preview button instead of its image.
             const preview = isChatGPTHost()
-                ? el.closest('button[data-testid="generated-image-preview"]')
+                ? el.closest('button[data-testid="generated-image-preview"], [role="group"][aria-label="Generated images"] button[aria-label^="Show generated image "]')
                 : null;
             el = preview ? preview.querySelector('img') : el.closest('img');
         }
@@ -2114,7 +2130,7 @@
             const grokOk = isGrokHost() && isGrokOptInImage(img);
             const geminiOk = isGeminiHost() && isGeminiOptInImage(img);
             // Fresh ChatGPT results use this layout too; allow their explicit preview button.
-            const chatgptOk = isChatGPTHost() && !!img.closest('button[data-testid="generated-image-preview"]');
+            const chatgptOk = isChatGPTHost() && !!img.closest('button[data-testid="generated-image-preview"], [role="group"][aria-label="Generated images"] button[aria-label^="Show generated image "]');
             if (!grokOk && !geminiOk && !chatgptOk) return true;
         }
         // Skip thumbnail images in Favorites button
