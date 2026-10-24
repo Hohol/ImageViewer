@@ -3,6 +3,7 @@ const path = require('node:path');
 
 const scriptPath = path.resolve(__dirname, '../../ImageViewer.js');
 const sections = {
+  'shared/viewer/hotkey-image': ['    function pickBestVisibleEligibleImage()', '    // Find the target video for keyboard controls'],
   'shared/viewer/local-hotkeys': ['        let help = null;', "        window.addEventListener('hashchange'"],
   'shared/viewer/local-images': ['    function localImageName(', '    function initLocalImageViewer()'],
   'grok/imagine-random-video': [

@@ -42,6 +42,7 @@ belongs in `support/`.
 | Area | Coverage |
 | --- | --- |
 | Local image navigation | Alphabetical ordering, same-folder filtering, duplicate links, encoded filenames, key routing, standalone modifiers versus combinations, help dismissal, held scrolling, and fullscreen/Escape routing (Node; browser APIs mocked). Real Chrome directory loading and fullscreen require a browser smoke check. |
+| Gallery hotkey selection | Nearest offscreen image by viewport-center distance, hidden/excluded images, visible-image priority, and ChatGPT cached-history fallback (mocked layout) |
 | Shared viewer navigation | Partial: cached navigation, ChatGPT search handoff, repeated keys, stale-result cancellation, basic non-ChatGPT fallback |
 | Gallery browser fullscreen | Mode transitions retain the overlay; failed entry, repeated requests, and closing in-page mode (mocked browser API) |
 | ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries (including mounted-edge detection, full-scan completion without the extra pagination wait at confirmed starts, retention across older chunks/remounts, and pagination/incomplete-content guards), edited branches, long text spans, paired generated images regrouped into shared message containers and loaded in reverse order, large-preview/picker duplicates and selection changes |

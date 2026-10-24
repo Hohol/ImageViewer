@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.39
+// @version      2.40
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -5430,6 +5430,30 @@
         return bestImg;
     }
 
+    // Offscreen images still have layout coordinates; hidden images do not.
+    function pickNearestEligibleImage() {
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        let nearest = null;
+        let bestDistance = Infinity;
+        for (const img of document.querySelectorAll('img')) {
+            if (isExcludedImage(img)) continue;
+            const rect = img.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            const distance = (rect.left + rect.width / 2 - cx) ** 2 +
+                (rect.top + rect.height / 2 - cy) ** 2;
+            if (distance < bestDistance) {
+                nearest = img;
+                bestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    function pickGalleryHotkeyImage() {
+        return pickBestVisibleEligibleImage() || ivChatGPTGallery?.nearestImage() || pickNearestEligibleImage();
+    }
+
     // Find the target video for keyboard controls
     // In fullscreen: use the fullscreen video element
     // Otherwise: pointer / largest visible video (Grok filmstrip + chat focus), then first match
@@ -5825,7 +5849,7 @@
                 return;
             }
             // Virtualized chats may have cached images with no mounted/visible source.
-            const img = pickBestVisibleEligibleImage() || ivChatGPTGallery?.nearestImage() || collectNavigableImages()[0];
+            const img = pickGalleryHotkeyImage();
             if (img) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
