@@ -917,10 +917,12 @@
         button.textContent = 'Retry image';
         const status = document.createElement('span');
         status.setAttribute('role', 'status');
-        Object.assign(status.style, { gridColumn: '1 / -1', gridRow: '2', overflowWrap: 'anywhere' });
+        Object.assign(status.style, { gridColumn: '1 / -1', gridRow: '3', overflowWrap: 'anywhere' });
         Object.assign(button.style, { color: 'inherit', background: 'transparent',
-            border: '1px solid #888', borderRadius: '5px', padding: '4px' });
-        panel.append(button, status);
+            border: '1px solid #888', borderRadius: '5px', padding: '10px 8px', minHeight: '44px' });
+        const autosendButton = button.cloneNode(true);
+        autosendButton.textContent = 'Autosend "d"';
+        panel.append(autosendButton, button, status);
         document.body.append(panel);
         const layoutStyle = document.createElement('style');
         layoutStyle.textContent = `
@@ -979,9 +981,17 @@
             .filter((item) => !item.matches('[data-chatgpt-search-unit-key$=":user"]'))
             .map((item) => item.getAttribute('data-chatgpt-search-message-ids')).join('|');
 
+        function setRetryButtonActive(item, active) {
+            item.style.background = active ? '#51432b' : 'transparent';
+            item.style.borderColor = active ? '#a58a55' : '#888';
+            item.style.color = active ? '#f2dfb5' : 'inherit';
+        }
         function finish(message) {
+            setRetryButtonActive(button, false);
+            setRetryButtonActive(autosendButton, false);
             run = null;
             button.textContent = 'Retry image';
+            autosendButton.textContent = 'Autosend "d"';
             status.textContent = message;
         }
         function check(session) {
@@ -1117,8 +1127,61 @@
             const session = { conversation: identity(), limit: attemptLimit };
             run = session;
             button.textContent = 'Stop retries';
+            setRetryButtonActive(button, true);
             void retry(session);
         });
+        autosendButton.addEventListener('click', () => {
+            if (run?.autosend) { finish('Autosend cancelled'); return; }
+            finish('Waiting for response to finish');
+            const session = { conversation: identity(), limit: attemptLimit, autosend: true };
+            run = session;
+            autosendButton.textContent = 'Cancel autosend';
+            setRetryButtonActive(autosendButton, true);
+            void autosend(session);
+        });
+        async function autosend(session) {
+            try {
+                let completedAt = 0;
+                await waitFor(session, () => {
+                    const turn = latest();
+                    if (!turn || state(turn) !== 'complete' || busy(turn)) { completedAt = 0; return false; }
+                    if (turn.querySelector(editorSelector)) throw new Error('Finish editing the message first');
+                    if (!completedAt) completedAt = Date.now();
+                    return Date.now() - completedAt >= 2000;
+                }, 15 * 60 * 1000, 'Response timed out; autosend stopped');
+                const input = composer()?.querySelector('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="Ask ChatGPT"], textarea');
+                if (!input) throw new Error('Prompt field is unavailable');
+                if ((input.value ?? input.textContent ?? '').trim()) throw new Error('Autosend stopped: prompt field contains a draft');
+                check(session);
+                automaticClick = true;
+                try {
+                    input.focus();
+                    if (input instanceof HTMLTextAreaElement) {
+                        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'd');
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                    } else if (!document.execCommand('insertText', false, 'd')) {
+                        throw new Error('Could not enter d in the prompt field');
+                    }
+                } finally { automaticClick = false; }
+                const send = await waitFor(session, () => {
+                    if ((input.value ?? input.textContent ?? '').trim() !== 'd') throw new Error('Prompt changed');
+                    if (busy(latest())) throw new Error('Another generation started');
+                    return Array.from(composer()?.querySelectorAll('button') || []).find(isPromptSend);
+                }, 5000, 'Send is unavailable; d left in prompt field');
+                session.previousTurn = key(latest());
+                session.previousResponses = responseIds(latest());
+                click(session, send, 'Send');
+                session.autosend = false;
+                session.manualPrompt = true;
+                autosendButton.textContent = 'Autosend "d"';
+                setRetryButtonActive(autosendButton, false);
+                button.textContent = 'Stop retries';
+                setRetryButtonActive(button, true);
+                await retry(session);
+            } catch (error) {
+                if (run === session) finish(error.message);
+            }
+        }
         function isPromptSend(item) {
             if (!enabled(item)) return false;
             const turn = item.closest(turnSelector);
@@ -1148,6 +1211,7 @@
                 previousTurn: key(current), previousResponses: responseIds(current) };
             run = session;
             button.textContent = 'Stop retries';
+            setRetryButtonActive(button, true);
             void retry(session);
         }
         // Reset completed status too, not just an active retry session. Our own
@@ -1165,7 +1229,7 @@
                 item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
         }, true);
         document.addEventListener('input', (event) => {
-            if (run && event.isTrusted && !panel.contains(event.target)) finish('Stopped after manual input');
+            if (run && !automaticClick && event.isTrusted && !panel.contains(event.target)) finish('Stopped after manual input');
         }, true);
         document.addEventListener('keydown', (event) => {
             if (!event.isTrusted || event.key !== 'Enter' || event.isComposing || event.shiftKey || panel.contains(event.target) ||

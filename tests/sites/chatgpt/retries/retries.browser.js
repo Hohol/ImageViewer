@@ -54,7 +54,7 @@ function setup(limit = 3, text = 'Draw a tree') {
   mount();
   controller = createChatGPTRetries(limit);
 }
-const start = () => document.querySelector('#iv-chatgpt-retries button').click();
+const start = () => document.querySelectorAll('#iv-chatgpt-retries button')[1].click();
 const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]').textContent;
 (async () => {
   setup();
@@ -123,7 +123,7 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   await until(() => status().startsWith('Image generated'));
   check(sends === 2, 'moderation failure retries while hidden; loaded generated image stops retries');
   delete document.hidden;
-  check(document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image', 'button returns to idle');
+  check(document.querySelectorAll('#iv-chatgpt-retries button')[1].textContent === 'Retry image', 'button returns to idle');
 
   setup();
   onSend = () => {
@@ -190,7 +190,7 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   await until(() => status().startsWith('Image generated'));
   const composerForm = document.querySelector('form[data-chatgpt-composer]');
   composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
+  check(status() === '' && document.querySelectorAll('#iv-chatgpt-retries button')[1].textContent === 'Retry image',
     'new prompt submission clears the completed retry status');
   controller.stop();
   mount();
@@ -205,7 +205,7 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   start();
   await until(() => sends === 1);
   composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
+  check(status() === '' && document.querySelectorAll('#iv-chatgpt-retries button')[1].textContent === 'Retry image',
     'manual submission cancels active retries and restores the default state');
   setup();
   const composerInput = composerForm.querySelector('[contenteditable]');
@@ -248,7 +248,57 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   setup();
   composerInput.textContent = 'draw a tree';
   composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
+  check(status() === '' && document.querySelectorAll('#iv-chatgpt-retries button')[1].textContent === 'Retry image',
     'other manually submitted prompts reset without enabling retries');
+  const autosend = () => document.querySelector('#iv-chatgpt-retries button').click();
+  let newSends = 0;
+  const nativeSend = document.createElement('button');
+  nativeSend.type = 'button';
+  nativeSend.setAttribute('data-testid', 'send-button');
+  nativeSend.onclick = () => {
+    check(composerInput.textContent === 'd', 'autosend enters d through the composer');
+    composerForm.requestSubmit();
+    newSends++;
+    composerInput.textContent = '';
+    promptText = 'd';
+    generation++;
+    mount('in_progress');
+    setTimeout(() => mount('complete', true), 350);
+  };
+  composerForm.addEventListener('submit', event => event.preventDefault());
+  composerForm.append(nativeSend);
+  setup();
+  composerInput.textContent = '';
+  mount('in_progress');
+  autosend();
+  await delay(2300);
+  check(newSends === 0, 'autosend waits while the answer is in progress');
+  mount('complete');
+  await until(() => status() === 'Image generated (0 retries)');
+  check(newSends === 1 && sends === 0, 'autosend sends once and activates image retries');
+
+  setup();
+  composerInput.textContent = '';
+  mount('in_progress');
+  autosend();
+  autosend();
+  mount('complete');
+  await delay(2300);
+  check(newSends === 1 && status() === 'Autosend cancelled', 'cancel prevents a queued d from sending');
+
+  setup();
+  composerInput.textContent = 'My draft';
+  autosend();
+  await until(() => status().includes('contains a draft'));
+  check(newSends === 1 && composerInput.textContent === 'My draft', 'autosend preserves an existing draft');
+
+  setup();
+  composerInput.textContent = '';
+  mount('in_progress');
+  autosend();
+  document.querySelector('[data-map-composer-conversation]').setAttribute('data-map-composer-conversation', 'autosend-other-chat');
+  await until(() => status() === 'Chat changed');
+  check(newSends === 1, 'chat navigation cancels pending autosend');
+  nativeSend.remove();
   controller.destroy();
 })().then(() => finish()).catch(error => { controller?.destroy(); finish(error); });
