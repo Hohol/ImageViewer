@@ -934,6 +934,7 @@
         document.head.append(layoutStyle);
         let layoutHost = null;
         let run = null;
+        let automaticClick = false;
         const timeline = () => document.querySelector('[data-app-action-timeline-scroll]');
         const identity = () => location.pathname + '|' +
             (document.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') || '');
@@ -997,7 +998,8 @@
         function click(session, item, control) {
             check(session);
             if (!enabled(item)) throw new Error(`${control} control is unavailable`);
-            item.click();
+            automaticClick = true;
+            try { item.click(); } finally { automaticClick = false; }
         }
         async function retry(session) {
             try {
@@ -1099,19 +1101,39 @@
             button.textContent = 'Stop retries';
             void retry(session);
         });
-        // Trusted user actions cancel automation before it can submit another edit.
+        function isPromptSend(item) {
+            if (!enabled(item)) return false;
+            const turn = item.closest(turnSelector);
+            const inComposer = !!composer()?.contains(item);
+            const inEditor = !!turn?.querySelector(editorSelector);
+            if (!inComposer && !inEditor) return false;
+            const label = (item.getAttribute('aria-label') || item.textContent).trim();
+            return item.matches('[data-testid="send-button"]') || /^(send|send prompt|submit|save(?: changes|\s*(?:&|and)\s*submit)?)$/i.test(label) ||
+                (item.type === 'submit' && inEditor);
+        }
+        // Reset completed status too, not just an active retry session. Our own
+        // synchronous edit/send clicks and their native submit events are exempt.
+        document.addEventListener('submit', (event) => {
+            if (automaticClick || panel.contains(event.target)) return;
+            const form = event.target;
+            if (composer()?.contains(form) || form.closest?.(turnSelector)?.querySelector(editorSelector)) finish('');
+        }, true);
         document.addEventListener('click', (event) => {
-            if (!run || !event.isTrusted || panel.contains(event.target)) return;
+            if (automaticClick || !event.isTrusted || panel.contains(event.target)) return;
             const item = event.target.closest?.('button');
-            if (item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
+            if (item && isPromptSend(item)) { finish(''); return; }
+            if (run && item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
                 item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
         }, true);
         document.addEventListener('input', (event) => {
             if (run && event.isTrusted && !panel.contains(event.target)) finish('Stopped after manual input');
         }, true);
         document.addEventListener('keydown', (event) => {
-            if (run && event.isTrusted && event.key === 'Enter' && !panel.contains(event.target) &&
-                event.target.closest?.('[contenteditable="true"], textarea')) finish('Stopped after manual input');
+            if (!event.isTrusted || event.key !== 'Enter' || event.isComposing || event.shiftKey || panel.contains(event.target) ||
+                !event.target.closest?.('[contenteditable="true"], textarea')) return;
+            const scope = event.target.closest(turnSelector) || (composer()?.contains(event.target) ? composer() : null);
+            if (Array.from(scope?.querySelectorAll('button') || []).some(isPromptSend)) finish('');
+            else if (run) finish('Stopped after manual input');
         }, true);
         const refresh = () => {
             if (run && identity() !== run.conversation) finish('Chat changed');

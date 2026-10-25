@@ -29,16 +29,21 @@ function mount(state = 'complete', image = false) {
     editor.contentEditable = 'true';
     editor.setAttribute('aria-label', 'Edit message');
     editor.textContent = 'Draw a tree';
+    const form = document.createElement('form');
+    form.addEventListener('submit', event => event.preventDefault());
     const send = document.createElement('button');
+    send.type = 'button';
     send.textContent = 'Send';
     send.onclick = () => {
+      form.requestSubmit();
       check(editor.textContent === 'Draw a tree', 'retry preserves editor contents');
       sends++;
       generation++;
       mount('in_progress');
       onSend();
     };
-    turn.append(editor, send);
+    form.append(editor, send);
+    turn.append(form);
   };
 }
 function setup(limit = 3) {
@@ -181,5 +186,24 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   check(sends === 1 && status().includes('Generating'), 'completed turn waits for its generated image to load');
   Object.defineProperty(img, 'complete', { configurable: true, value: true });
   await until(() => status().startsWith('Image generated'));
+  const composerForm = document.querySelector('form[data-chatgpt-composer]');
+  composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
+    'new prompt submission clears the completed retry status');
+  controller.stop();
+  mount();
+  const editForm = document.createElement('form');
+  const editInput = document.createElement('textarea');
+  editForm.append(editInput);
+  root.firstElementChild.append(editForm);
+  editForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(status() === '', 'edited prompt submission clears stale retry status');
+  setup();
+  onSend = () => {};
+  start();
+  await until(() => sends === 1);
+  composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
+    'manual submission cancels active retries and restores the default state');
   controller.destroy();
 })().then(() => finish()).catch(error => { controller?.destroy(); finish(error); });
