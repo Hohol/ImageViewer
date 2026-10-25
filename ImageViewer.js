@@ -897,6 +897,277 @@
 
     // The timeline only mounts a small window of turns. Keep discovered images independent
     // of those DOM nodes and own the blob URLs so unmounting cannot revoke our images.
+    // Bounded retries through ChatGPT's own edit/send controls.
+    const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
+    function createChatGPTRetries(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
+        if (!isChatGPTHost()) return null;
+        const turnSelector = '[data-turn-key]';
+        const editorSelector = '[contenteditable="true"][aria-label="Edit message"], textarea';
+        const panel = document.createElement('div');
+        panel.id = 'iv-chatgpt-retries';
+        Object.assign(panel.style, {
+            display: 'grid', gridTemplateColumns: '1fr', alignItems: 'center',
+            gap: '6px 8px', padding: '8px', boxSizing: 'border-box', minWidth: '0',
+            borderRadius: '10px', background: 'var(--color-bg-elevated, #252525)',
+            color: 'var(--color-text-primary, #fff)', border: '1px solid #777',
+            font: '12px system-ui', boxShadow: '0 2px 8px #0003',
+        });
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Retry image';
+        const status = document.createElement('span');
+        status.setAttribute('role', 'status');
+        Object.assign(status.style, { gridColumn: '1 / -1', gridRow: '2', overflowWrap: 'anywhere' });
+        Object.assign(button.style, { color: 'inherit', background: 'transparent',
+            border: '1px solid #888', borderRadius: '5px', padding: '4px' });
+        panel.append(button, status);
+        document.body.append(panel);
+        const layoutStyle = document.createElement('style');
+        layoutStyle.textContent = `
+            #iv-chatgpt-retries.iv-retry-side {
+                position: fixed; width: 220px; z-index: 9999;
+            }
+            #iv-chatgpt-retries.iv-retry-stacked {
+                position: static; width: 100%; margin-top: 8px;
+            }
+        `;
+        document.head.append(layoutStyle);
+        let layoutHost = null;
+        let run = null;
+        const timeline = () => document.querySelector('[data-app-action-timeline-scroll]');
+        const identity = () => location.pathname + '|' +
+            (document.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') || '');
+        const latest = () => Array.from(timeline()?.querySelectorAll(turnSelector) || []).at(-1);
+        const distanceFromLatest = (root) => Math.max(0,
+            getComputedStyle(root).flexDirection === 'column-reverse'
+                ? -root.scrollTop : root.scrollHeight - root.scrollTop - root.clientHeight);
+        function latestPosition(root, turn) {
+            if (!root || !turn) return { atLatest: false, reason: 'missing-timeline-or-turn' };
+            const distance = distanceFromLatest(root);
+            const viewport = root.getBoundingClientRect();
+            const bounds = turn.getBoundingClientRect();
+            const turnVisible = bounds.height > 0 && bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+            const controls = Array.from(root.parentElement?.querySelectorAll('button[aria-label="Scroll to bottom"]') || []);
+            // ChatGPT can keep blank space below the last turn during generation.
+            // Its own hidden bottom control confirms the tail is mounted even when
+            // that spacer leaves us farther from the numerical scroll limit.
+            const atTail = controls.length > 0 && controls.every((item) => item.getAttribute('aria-hidden') === 'true');
+            const atLatest = distance <= 100 || (turnVisible && atTail);
+            return { atLatest, distance, turnVisible, atTail,
+                reason: distance <= 100 ? 'near-scroll-end' : atLatest ? 'visible-tail-with-hidden-bottom-control' : 'away-from-latest' };
+        }
+        const key = (turn) => turn?.getAttribute('data-turn-key');
+        const state = (turn) => turn?.querySelector('[data-talvt-turn-state]')?.getAttribute('data-talvt-turn-state');
+        const stopSelector = 'button[aria-label="Stop"], button[data-testid="stop-button"]';
+        const composer = () => document.querySelector('[data-map-composer-conversation]');
+        // After edit/send, ChatGPT can leave the turn marked complete for several
+        // seconds even though the composer already exposes its Stop control.
+        const busy = (turn) => state(turn) === 'in_progress' ||
+            !!turn?.querySelector('[data-talvt-turn-state="in_progress"], [data-testid="image-gen-loading-game-board"]') ||
+            !!composer()?.querySelector(stopSelector);
+        const prompt = (turn) => turn?.querySelector('[data-user-message-bubble]')?.textContent || '';
+        const editButton = (turn) => turn?.querySelector('button[aria-label="Edit message"]');
+        const namedButton = (turn, name) => Array.from(turn?.querySelectorAll('button') || [])
+            .find((item) => (item.getAttribute('aria-label') || item.textContent).trim().toLowerCase() === name);
+        const enabled = (item) => item && !item.disabled && item.getAttribute('aria-disabled') !== 'true';
+        const images = (turn) => Array.from(turn?.querySelectorAll('img[alt^="Generated image"]') || []);
+        const responseIds = (turn) => Array.from(turn?.querySelectorAll('[data-chatgpt-search-message-ids]') || [])
+            .filter((item) => !item.matches('[data-chatgpt-search-unit-key$=":user"]'))
+            .map((item) => item.getAttribute('data-chatgpt-search-message-ids')).join('|');
+
+        function finish(message) {
+            run = null;
+            button.textContent = 'Retry image';
+            status.textContent = message;
+        }
+        function check(session) {
+            if (run !== session) throw new Error('cancelled');
+            if (identity() !== session.conversation) throw new Error('Chat changed');
+        }
+        async function waitFor(session, predicate, timeout, message) {
+            const end = Date.now() + timeout;
+            while (true) {
+                check(session);
+                const result = predicate();
+                if (result) return result;
+                if (Date.now() >= end) throw new Error(message);
+                await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+        }
+        function click(session, item, control) {
+            check(session);
+            if (!enabled(item)) throw new Error(`${control} control is unavailable`);
+            item.click();
+        }
+        async function retry(session) {
+            try {
+                let turn = latest();
+                const root = timeline();
+                const position = latestPosition(root, turn);
+                const rejection = !root ? 'timeline-missing' : !turn ? 'latest-turn-missing' :
+                    !position.atLatest ? 'away-from-latest' : null;
+                if (rejection) {
+                    throw new Error('Scroll to the latest message first');
+                }
+                if (turn.querySelector(editorSelector)) throw new Error('Finish editing the message first');
+                if (!editButton(turn) && !busy(turn)) throw new Error('Edit message control is unavailable');
+                session.turnKey = key(turn);
+                session.prompt = prompt(turn);
+                // An existing generation is allowed to finish before spending a retry.
+                if (busy(turn)) {
+                    status.textContent = 'Waiting for current generation';
+                    await waitFor(session, () => {
+                        const current = latest();
+                        if (key(current) !== session.turnKey) throw new Error('Message changed');
+                        return state(current) === 'complete' && !busy(current);
+                    }, 15 * 60 * 1000, 'Generation timed out; retries stopped');
+                    turn = latest();
+                    if (images(turn).some((img) => img.complete && img.naturalWidth > 0)) {
+                        finish('Image generated (0 retries)');
+                        return;
+                    }
+                }
+                for (let attempt = 1; attempt <= session.limit; attempt++) {
+                    check(session);
+                    turn = latest();
+                    if (key(turn) !== session.turnKey || prompt(turn) !== session.prompt) throw new Error('Message changed');
+                    if (busy(turn)) throw new Error('Another generation started');
+                    if (attempt > 1) {
+                        status.textContent = 'Retrying in 3 seconds…';
+                        const until = Date.now() + 3000;
+                        await waitFor(session, () => Date.now() >= until, 4000, 'Retry delay interrupted');
+                    }
+                    turn = latest();
+                    if (key(turn) !== session.turnKey || prompt(turn) !== session.prompt || busy(turn)) {
+                        throw new Error('Message changed');
+                    }
+                    status.textContent = `Attempt ${attempt}/${session.limit} · Editing`;
+                    const oldIds = responseIds(turn);
+                    const oldImages = new Set(images(turn).map((img) => img.currentSrc || img.src));
+                    click(session, editButton(turn), 'Edit message');
+                    const editor = await waitFor(session, () => latest()?.querySelector(editorSelector),
+                        5000, 'Could not open message editor');
+                    const editTurn = editor.closest(turnSelector);
+                    const send = await waitFor(session, () => {
+                        const item = namedButton(editTurn, 'send');
+                        return enabled(item) && item;
+                    }, 5000, 'Send is unavailable');
+                    // Do not rewrite the editor: this preserves the prompt and attachments.
+                    click(session, send, 'Send');
+                    status.textContent = `Attempt ${attempt}/${session.limit} · Generating`;
+                    const sentAt = Date.now();
+                    let started = false;
+                    let completedAt = 0;
+                    await waitFor(session, () => {
+                        const current = latest();
+                        if (!current) return false;
+                        if (started && key(current) !== session.turnKey) throw new Error('Message changed');
+                        if (current.querySelector(editorSelector)) return false;
+                        if (prompt(current) !== session.prompt) throw new Error('Message changed');
+                        // Editing may replace the user turn ID. Only accept it after
+                        // observing a new response or an active generation.
+                        if (busy(current) || (responseIds(current) && responseIds(current) !== oldIds)) {
+                            started = true;
+                            session.turnKey = key(current);
+                        }
+                        if (!started && Date.now() - sentAt > 15000) throw new Error('Generation did not start');
+                        if (!started) return false;
+                        if (state(current) !== 'complete' || busy(current)) { completedAt = 0; return false; }
+                        if (!completedAt) completedAt = Date.now();
+                        const generated = images(current).filter((img) => !oldImages.has(img.currentSrc || img.src));
+                        if (generated.some((img) => img.complete && img.naturalWidth > 0)) return true;
+                        // A completed image may still be decoding/downloading. Never
+                        // submit another generation just because its image loads slowly.
+                        if (generated.length) return false;
+                        return Date.now() - completedAt >= 2000;
+                    }, 15 * 60 * 1000, 'Generation timed out; retries stopped');
+                    turn = latest();
+                    if (images(turn).some((img) => !oldImages.has(img.currentSrc || img.src) && img.complete && img.naturalWidth > 0)) {
+                        finish(`Image generated (${attempt} retries)`);
+                        return;
+                    }
+                }
+                finish(`Attempt limit reached (${session.limit})`);
+            } catch (error) {
+                if (run === session) finish(error.message);
+            }
+        }
+        button.addEventListener('click', () => {
+            if (run) { finish('Retries stopped'); return; }
+            const session = { conversation: identity(), limit: attemptLimit };
+            run = session;
+            button.textContent = 'Stop retries';
+            void retry(session);
+        });
+        // Trusted user actions cancel automation before it can submit another edit.
+        document.addEventListener('click', (event) => {
+            if (!run || !event.isTrusted || panel.contains(event.target)) return;
+            const item = event.target.closest?.('button');
+            if (item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
+                item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
+        }, true);
+        document.addEventListener('input', (event) => {
+            if (run && event.isTrusted && !panel.contains(event.target)) finish('Stopped after manual input');
+        }, true);
+        document.addEventListener('keydown', (event) => {
+            if (run && event.isTrusted && event.key === 'Enter' && !panel.contains(event.target) &&
+                event.target.closest?.('[contenteditable="true"], textarea')) finish('Stopped after manual input');
+        }, true);
+        const refresh = () => {
+            if (run && identity() !== run.conversation) finish('Chat changed');
+            const host = composer()?.querySelector('form[data-chatgpt-composer]');
+            if (host !== layoutHost) {
+                if (layoutHost) {
+                    layoutObserver.unobserve(layoutHost);
+                    layoutHost.classList.remove('iv-retry-side', 'iv-retry-stacked');
+                }
+                layoutHost = host;
+                if (host) layoutObserver.observe(host);
+            }
+            panel.hidden = !timeline() || !host;
+            panel.style.display = panel.hidden ? 'none' : 'grid';
+            if (!host) return;
+            // Use only the space outside the original composer, never its width.
+            const side = document.documentElement.clientWidth - host.getBoundingClientRect().right >= 244;
+            host.classList.toggle('iv-retry-side', side);
+            host.classList.toggle('iv-retry-stacked', !side);
+            panel.classList.toggle('iv-retry-side', side);
+            panel.classList.toggle('iv-retry-stacked', !side);
+            const parent = side ? document.body : host;
+            if (panel.parentElement !== parent) parent.append(panel);
+            if (side) {
+                const rect = host.getBoundingClientRect();
+                panel.style.left = `${rect.right + 12}px`;
+                panel.style.top = `${Math.max(8, rect.bottom - panel.offsetHeight)}px`;
+            } else {
+                panel.style.removeProperty('left');
+                panel.style.removeProperty('top');
+            }
+        };
+        let layoutFrame = null;
+        const scheduleLayout = () => {
+            if (layoutFrame == null) layoutFrame = requestAnimationFrame(() => {
+                layoutFrame = null;
+                refresh();
+            });
+        };
+        const layoutObserver = new ResizeObserver(scheduleLayout);
+        window.addEventListener('resize', scheduleLayout);
+        window.addEventListener('scroll', scheduleLayout, true);
+        layoutObserver.observe(panel);
+        const timer = setInterval(refresh, 1000);
+        refresh();
+        return { stop: () => finish('Retries stopped'), destroy: () => {
+            finish(''); clearInterval(timer); layoutObserver.disconnect();
+            if (layoutFrame != null) cancelAnimationFrame(layoutFrame);
+            layoutHost?.classList.remove('iv-retry-side', 'iv-retry-stacked');
+            window.removeEventListener('resize', scheduleLayout);
+            window.removeEventListener('scroll', scheduleLayout, true);
+            panel.remove(); layoutStyle.remove();
+        } };
+
+    }
+
     function createChatGPTGallery() {
         if (!isChatGPTHost()) return null;
         const timelineSelector = '[data-app-action-timeline-scroll]';
@@ -6061,6 +6332,7 @@
     };
     ivChatGPTNavigationDebug = createChatGPTNavigationDebug();
     ivChatGPTGallery = createChatGPTGallery();
+    createChatGPTRetries();
     } // End of init()
     
     // Run init when DOM is ready

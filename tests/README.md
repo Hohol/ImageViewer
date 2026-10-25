@@ -48,6 +48,7 @@ belongs in `support/`.
 | ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries (including mounted-edge detection, full-scan completion without the extra pagination wait at confirmed starts, retention across older chunks/remounts, and pagination/incomplete-content guards), edited branches, long text spans, paired generated images regrouped into shared message containers and loaded in reverse order, large-preview/picker duplicates and selection changes |
 | ChatGPT search-image cards | Excluded from clicks, navigation, and gallery capture; generated images and generic image/button components stay eligible |
 | ChatGPT SVG components | Marked SVG components are excluded; ordinary SVG images stay eligible |
+| ChatGPT image retries | Non-overlapping side/stacked composer layouts, reversed-scroll latest-message detection and distinct missing-control errors; bounded edit/send retries including moderation failures, successful image detection, reference-image exclusion, delayed image loading, hidden-document continuation, delayed turn-state transitions with an active composer Stop button, cancellation, and conversation changes (synthetic browser DOM) |
 | ChatGPT navigation diagnostics | Detached images, turn changes, URL redaction, bounded logs, listener cleanup |
 | Shared image eligibility | Common exclusions and ChatGPT generated-image exceptions agree for clicking and navigation |
 | Gemini integration | Inline generated images, lightbox images, source/markup eligibility, upload-preview exclusions |
@@ -95,6 +96,8 @@ The ChatGPT gallery suites are under `chatgpt/gallery/`:
 | `branches` | Edit cancellation and submission, preserving earlier images, stale DOM/fetches, new branch images, edits during scans |
 | `long-text` | Scan and navigation skip large text spans while retaining sparse images |
 | `eligibility` | Real image exclusions during scans, passive capture, and lookup through unloaded turns |
+
+The `chatgpt/retries` suite uses `/sites/chatgpt/retries/fixture.html` to exercise automatic retries without submitting real prompts. Live ChatGPT compatibility still requires a manual smoke check.
 
 The `chatgpt/search-image-eligibility`, `chatgpt/svg-image-eligibility`, `shared/viewer/image-eligibility`,
 `gemini/image-eligibility`, and

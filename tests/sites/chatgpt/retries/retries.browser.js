@@ -1,0 +1,185 @@
+const root = document.querySelector('[data-app-action-timeline-scroll]');
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(predicate) {
+  const end = Date.now() + 12000;
+  while (!predicate()) {
+    if (Date.now() > end) throw new Error('Test timed out');
+    await delay(30);
+  }
+}
+let controller;
+let sends;
+let onSend;
+let generation = 0;
+const canvas = document.createElement('canvas');
+canvas.width = canvas.height = 16;
+const imageUrl = canvas.toDataURL();
+function mount(state = 'complete', image = false) {
+  root.innerHTML = `<div data-turn-key="turn-${generation}"><div data-talvt-turn-state="${state}">
+    <div data-chatgpt-search-unit-key="turn:user" data-chatgpt-search-message-ids="user">
+      <div data-user-message-bubble>Draw a tree</div><button aria-label="Edit message">Edit</button>
+      <img alt="User attachment" src="${imageUrl}">
+    </div>
+    <div data-chatgpt-search-message-ids="response-${generation}">Image could not be generated: moderation failure</div>
+    ${image ? `<img alt="Generated image 1" src="${imageUrl}#${generation}">` : ''}
+    </div></div>`;
+  root.querySelector('button').onclick = () => {
+    const turn = root.firstElementChild;
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    editor.setAttribute('aria-label', 'Edit message');
+    editor.textContent = 'Draw a tree';
+    const send = document.createElement('button');
+    send.textContent = 'Send';
+    send.onclick = () => {
+      check(editor.textContent === 'Draw a tree', 'retry preserves editor contents');
+      sends++;
+      generation++;
+      mount('in_progress');
+      onSend();
+    };
+    turn.append(editor, send);
+  };
+}
+function setup(limit = 3) {
+  controller?.destroy();
+  sends = 0;
+  mount();
+  controller = createChatGPTRetries(limit);
+}
+const start = () => document.querySelector('#iv-chatgpt-retries button').click();
+const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]').textContent;
+(async () => {
+  setup();
+  const form = document.querySelector('form[data-chatgpt-composer]');
+  const promptField = form.querySelector('[contenteditable]');
+  const retryPanel = document.querySelector('#iv-chatgpt-retries');
+  await until(() => form.classList.contains('iv-retry-side'));
+  check(promptField.getBoundingClientRect().right <= retryPanel.getBoundingClientRect().left,
+    'retry panel sits outside the composer without covering prompt controls');
+  check(promptField.getBoundingClientRect().width === form.getBoundingClientRect().width,
+    'side panel preserves the full original prompt width');
+  form.style.width = '100%';
+  await until(() => form.classList.contains('iv-retry-stacked'));
+  check(promptField.getBoundingClientRect().bottom <= retryPanel.getBoundingClientRect().top,
+    'insufficient outside space stacks controls without reducing prompt width');
+  form.style.width = '900px';
+  await until(() => form.classList.contains('iv-retry-side'));
+  setup();
+  // ChatGPT's reversed scroller is at the latest message at scrollTop zero.
+  root.style.cssText = 'display:flex;flex-direction:column-reverse;height:120px;overflow:auto';
+  root.firstElementChild.style.cssText = 'min-height:600px;flex-shrink:0';
+  root.scrollTop = -250;
+  onSend = () => {};
+  start();
+  check(status() === 'Scroll to the latest message first' && sends === 0,
+    'reversed scroller rejects genuinely older history');
+  root.scrollTop = 0;
+  start();
+  await until(() => sends === 1);
+  check(status().includes('Generating'), 'reversed scroller accepts the latest message at scrollTop zero');
+  controller.stop();
+  root.style.cssText = '';
+  setup();
+  root.querySelector('button[aria-label="Edit message"]').remove();
+  start();
+  check(status() === 'Edit message control is unavailable', 'missing Edit does not incorrectly blame scrolling');
+  setup();
+  root.style.cssText = 'height:200px;overflow:auto';
+  root.firstElementChild.style.height = '120px';
+  const spacer = document.createElement('div');
+  spacer.style.height = '400px';
+  root.append(spacer);
+  const bottomControl = document.createElement('button');
+  bottomControl.setAttribute('aria-label', 'Scroll to bottom');
+  bottomControl.setAttribute('aria-hidden', 'false');
+  root.parentElement.append(bottomControl);
+  onSend = () => {};
+  start();
+  check(status() === 'Scroll to the latest message first' && sends === 0,
+    'visible bottom control still rejects older history');
+  bottomControl.setAttribute('aria-hidden', 'true');
+  start();
+  await until(() => sends === 1);
+  check(status().includes('Generating'),
+    'visible latest turn with hidden bottom control accepts trailing blank space');
+  controller.stop();
+  bottomControl.remove();
+  root.style.cssText = '';
+  setup();
+  // Hidden documents must remain eligible for retries. Actual browser timer
+  // throttling is separately checked by running this fixture in a background tab.
+  Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+  document.dispatchEvent(new Event('visibilitychange'));
+  onSend = () => setTimeout(() => mount('complete', sends === 2), 350);
+  start();
+  await until(() => status().startsWith('Image generated'));
+  check(sends === 2, 'moderation failure retries while hidden; loaded generated image stops retries');
+  delete document.hidden;
+  check(document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image', 'button returns to idle');
+
+  setup();
+  onSend = () => {
+    // Reproduce the captured live transition: a new response/turn is still
+    // marked complete and Edit is absent, but the composer has a Stop button.
+    mount('complete');
+    root.querySelector('button[aria-label="Edit message"]').remove();
+    const stop = document.createElement('button');
+    stop.setAttribute('aria-label', 'Stop');
+    document.querySelector('[data-map-composer-conversation]').append(stop);
+    setTimeout(() => mount('in_progress'), 6000);
+    setTimeout(() => { stop.remove(); mount('complete', true); }, 6500);
+  };
+  start();
+  await until(() => sends === 1);
+  await delay(5700);
+  check(sends === 1 && status().includes('Attempt 1/3 · Generating'),
+    'composer Stop prevents a premature second attempt while turn incorrectly says complete');
+  await until(() => status().startsWith('Image generated'));
+  check(sends === 1, 'delayed in-progress transition finishes the original attempt successfully');
+
+  setup(2);
+  onSend = () => setTimeout(() => mount('complete'), 350);
+  start();
+  await until(() => status().startsWith('Attempt limit'));
+  check(sends === 2, 'additional attempt limit is enforced; attachments never count as success');
+
+  setup();
+  onSend = () => {};
+  start();
+  await until(() => sends === 1);
+  start();
+  mount('complete');
+  await delay(550);
+  check(sends === 1 && status() === 'Retries stopped', 'Stop retries cancels the loop during generation');
+
+  setup();
+  mount('in_progress');
+  start();
+  await delay(100);
+  check(sends === 0, 'does not submit over an existing generation');
+  mount('complete', true);
+  await until(() => status() === 'Image generated (0 retries)');
+  check(sends === 0, 'existing generation success needs no retry');
+
+  setup();
+  onSend = () => {};
+  start();
+  await until(() => sends === 1);
+  document.querySelector('[data-map-composer-conversation]').setAttribute('data-map-composer-conversation', 'different');
+  await until(() => status() === 'Chat changed');
+  check(sends === 1, 'conversation change stops the session');
+
+  setup();
+  onSend = () => {};
+  start();
+  await until(() => sends === 1);
+  mount('complete', true);
+  const img = root.querySelector('img[alt^="Generated"]');
+  Object.defineProperty(img, 'complete', { configurable: true, value: false });
+  await delay(2500);
+  check(sends === 1 && status().includes('Generating'), 'completed turn waits for its generated image to load');
+  Object.defineProperty(img, 'complete', { configurable: true, value: true });
+  await until(() => status().startsWith('Image generated'));
+  controller.destroy();
+})().then(() => finish()).catch(error => { controller?.destroy(); finish(error); });

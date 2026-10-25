@@ -7,6 +7,7 @@ const browserSuites = ['scan', 'manual', 'navigation', 'boundaries', 'branches',
 }));
 
 browserSuites.push(
+  { id: 'chatgpt/retries', page: '/sites/chatgpt/retries/fixture.html', script: '/sites/chatgpt/retries/retries.browser.js' },
   {
     id: 'chatgpt/svg-image-eligibility',
     page: '/shared/viewer/eligibility/fixture.html',
