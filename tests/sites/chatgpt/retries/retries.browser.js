@@ -11,13 +11,14 @@ let controller;
 let sends;
 let onSend;
 let generation = 0;
+let promptText = 'Draw a tree';
 const canvas = document.createElement('canvas');
 canvas.width = canvas.height = 16;
 const imageUrl = canvas.toDataURL();
 function mount(state = 'complete', image = false) {
   root.innerHTML = `<div data-turn-key="turn-${generation}"><div data-talvt-turn-state="${state}">
     <div data-chatgpt-search-unit-key="turn:user" data-chatgpt-search-message-ids="user">
-      <div data-user-message-bubble>Draw a tree</div><button aria-label="Edit message">Edit</button>
+      <div data-user-message-bubble>${promptText}</div><button aria-label="Edit message">Edit</button>
       <img alt="User attachment" src="${imageUrl}">
     </div>
     <div data-chatgpt-search-message-ids="response-${generation}">Image could not be generated: moderation failure</div>
@@ -28,7 +29,7 @@ function mount(state = 'complete', image = false) {
     const editor = document.createElement('div');
     editor.contentEditable = 'true';
     editor.setAttribute('aria-label', 'Edit message');
-    editor.textContent = 'Draw a tree';
+    editor.textContent = promptText;
     const form = document.createElement('form');
     form.addEventListener('submit', event => event.preventDefault());
     const send = document.createElement('button');
@@ -36,7 +37,7 @@ function mount(state = 'complete', image = false) {
     send.textContent = 'Send';
     send.onclick = () => {
       form.requestSubmit();
-      check(editor.textContent === 'Draw a tree', 'retry preserves editor contents');
+      check(editor.textContent === promptText, 'retry preserves editor contents');
       sends++;
       generation++;
       mount('in_progress');
@@ -46,9 +47,10 @@ function mount(state = 'complete', image = false) {
     turn.append(form);
   };
 }
-function setup(limit = 3) {
+function setup(limit = 3, text = 'Draw a tree') {
   controller?.destroy();
   sends = 0;
+  promptText = text;
   mount();
   controller = createChatGPTRetries(limit);
 }
@@ -205,5 +207,48 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
     'manual submission cancels active retries and restores the default state');
+  setup();
+  const composerInput = composerForm.querySelector('[contenteditable]');
+  composerInput.textContent = ' d ';
+  composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(status() === 'Waiting for submitted prompt', 'manual d arms retries before the new turn appears');
+  generation++;
+  promptText = 'd';
+  mount('in_progress');
+  await delay(350);
+  check(sends === 0 && status() === 'Waiting for current generation', 'd waits for initial generation without spending a retry');
+  mount('complete', true);
+  await until(() => status() === 'Image generated (0 retries)');
+
+  setup();
+  composerInput.textContent = 'd';
+  onSend = () => setTimeout(() => mount('complete', true), 350);
+  composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  generation++;
+  promptText = 'd';
+  mount('complete');
+  await until(() => status() === 'Image generated (1 retries)');
+  check(sends === 1, 'failed manual d automatically retries; automatic d submissions do not restart the loop');
+
+  setup();
+  const manualEditForm = document.createElement('form');
+  const manualEditInput = document.createElement('textarea');
+  manualEditInput.value = 'd';
+  manualEditForm.append(manualEditInput);
+  root.firstElementChild.append(manualEditForm);
+  manualEditForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(status() === 'Waiting for submitted prompt', 'manually edited d also arms retries');
+  controller.stop();
+  generation++;
+  promptText = 'd';
+  mount('in_progress');
+  await delay(350);
+  check(status() === 'Retries stopped' && sends === 0, 'Stop retries cancels a pending manual d submission');
+
+  setup();
+  composerInput.textContent = 'draw a tree';
+  composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(status() === '' && document.querySelector('#iv-chatgpt-retries button').textContent === 'Retry image',
+    'other manually submitted prompts reset without enabling retries');
   controller.destroy();
 })().then(() => finish()).catch(error => { controller?.destroy(); finish(error); });

@@ -935,6 +935,9 @@
         let layoutHost = null;
         let run = null;
         let automaticClick = false;
+        let destroyed = false;
+        let submissionTick = false;
+        let submissionScope = null;
         const timeline = () => document.querySelector('[data-app-action-timeline-scroll]');
         const identity = () => location.pathname + '|' +
             (document.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') || '');
@@ -1003,25 +1006,40 @@
         }
         async function retry(session) {
             try {
+                if (session.manualPrompt) {
+                    status.textContent = 'Waiting for submitted prompt';
+                    await waitFor(session, () => {
+                        const current = latest();
+                        if (!current || current.querySelector(editorSelector) || prompt(current).trim() !== 'd') return false;
+                        return key(current) !== session.previousTurn ||
+                            (!!responseIds(current) && responseIds(current) !== session.previousResponses);
+                    }, 15000, 'Submitted prompt did not appear');
+                }
                 let turn = latest();
                 const root = timeline();
                 const position = latestPosition(root, turn);
                 const rejection = !root ? 'timeline-missing' : !turn ? 'latest-turn-missing' :
                     !position.atLatest ? 'away-from-latest' : null;
-                if (rejection) {
+                if (rejection && !session.manualPrompt) {
                     throw new Error('Scroll to the latest message first');
                 }
                 if (turn.querySelector(editorSelector)) throw new Error('Finish editing the message first');
-                if (!editButton(turn) && !busy(turn)) throw new Error('Edit message control is unavailable');
+                if (!session.manualPrompt && !editButton(turn) && !busy(turn)) throw new Error('Edit message control is unavailable');
                 session.turnKey = key(turn);
                 session.prompt = prompt(turn);
                 // An existing generation is allowed to finish before spending a retry.
-                if (busy(turn)) {
+                if (busy(turn) || session.manualPrompt) {
                     status.textContent = 'Waiting for current generation';
+                    let completedAt = 0;
                     await waitFor(session, () => {
                         const current = latest();
                         if (key(current) !== session.turnKey) throw new Error('Message changed');
-                        return state(current) === 'complete' && !busy(current);
+                        if (state(current) !== 'complete' || busy(current)) { completedAt = 0; return false; }
+                        const generated = images(current);
+                        if (generated.some((img) => img.complete && img.naturalWidth > 0)) return true;
+                        if (generated.length || !enabled(editButton(current))) return false;
+                        if (!completedAt) completedAt = Date.now();
+                        return Date.now() - completedAt >= 2000;
                     }, 15 * 60 * 1000, 'Generation timed out; retries stopped');
                     turn = latest();
                     if (images(turn).some((img) => img.complete && img.naturalWidth > 0)) {
@@ -1111,17 +1129,38 @@
             return item.matches('[data-testid="send-button"]') || /^(send|send prompt|submit|save(?: changes|\s*(?:&|and)\s*submit)?)$/i.test(label) ||
                 (item.type === 'submit' && inEditor);
         }
+        function manualSubmission(target) {
+            if (destroyed || automaticClick) return;
+            const turn = target.closest?.(turnSelector);
+            const scope = turn || composer();
+            if (submissionTick && submissionScope === scope) return;
+            const input = turn ? turn.querySelector(editorSelector) :
+                scope?.querySelector('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="Ask ChatGPT"], textarea');
+            const text = (input?.value ?? input?.textContent ?? '').trim();
+            // Enter/click and the form's submit event can describe the same send.
+            submissionTick = true;
+            submissionScope = scope;
+            setTimeout(() => { submissionTick = false; }, 0);
+            finish('');
+            if (text !== 'd') return;
+            const current = latest();
+            const session = { conversation: identity(), limit: attemptLimit, manualPrompt: true,
+                previousTurn: key(current), previousResponses: responseIds(current) };
+            run = session;
+            button.textContent = 'Stop retries';
+            void retry(session);
+        }
         // Reset completed status too, not just an active retry session. Our own
         // synchronous edit/send clicks and their native submit events are exempt.
         document.addEventListener('submit', (event) => {
             if (automaticClick || panel.contains(event.target)) return;
             const form = event.target;
-            if (composer()?.contains(form) || form.closest?.(turnSelector)?.querySelector(editorSelector)) finish('');
+            if (composer()?.contains(form) || form.closest?.(turnSelector)?.querySelector(editorSelector)) manualSubmission(form);
         }, true);
         document.addEventListener('click', (event) => {
             if (automaticClick || !event.isTrusted || panel.contains(event.target)) return;
             const item = event.target.closest?.('button');
-            if (item && isPromptSend(item)) { finish(''); return; }
+            if (item && isPromptSend(item)) { manualSubmission(item); return; }
             if (run && item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
                 item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
         }, true);
@@ -1132,7 +1171,7 @@
             if (!event.isTrusted || event.key !== 'Enter' || event.isComposing || event.shiftKey || panel.contains(event.target) ||
                 !event.target.closest?.('[contenteditable="true"], textarea')) return;
             const scope = event.target.closest(turnSelector) || (composer()?.contains(event.target) ? composer() : null);
-            if (Array.from(scope?.querySelectorAll('button') || []).some(isPromptSend)) finish('');
+            if (Array.from(scope?.querySelectorAll('button') || []).some(isPromptSend)) manualSubmission(event.target);
             else if (run) finish('Stopped after manual input');
         }, true);
         const refresh = () => {
@@ -1180,6 +1219,7 @@
         const timer = setInterval(refresh, 1000);
         refresh();
         return { stop: () => finish('Retries stopped'), destroy: () => {
+            destroyed = true;
             finish(''); clearInterval(timer); layoutObserver.disconnect();
             if (layoutFrame != null) cancelAnimationFrame(layoutFrame);
             layoutHost?.classList.remove('iv-retry-side', 'iv-retry-stacked');
