@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.41
+// @version      2.42
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -921,7 +921,7 @@
         Object.assign(button.style, { color: 'inherit', background: 'transparent',
             border: '1px solid #888', borderRadius: '5px', padding: '10px 8px', minHeight: '44px' });
         const autosendButton = button.cloneNode(true);
-        autosendButton.textContent = 'Autosend "d"';
+        autosendButton.textContent = 'Draw when ready';
         panel.append(autosendButton, button, status);
         document.body.append(panel);
         const layoutStyle = document.createElement('style');
@@ -991,7 +991,7 @@
             setRetryButtonActive(autosendButton, false);
             run = null;
             button.textContent = 'Retry image';
-            autosendButton.textContent = 'Autosend "d"';
+            autosendButton.textContent = 'Draw when ready';
             status.textContent = message;
         }
         function check(session) {
@@ -1132,10 +1132,10 @@
         });
         autosendButton.addEventListener('click', () => {
             if (run?.autosend) { finish('Autosend cancelled'); return; }
-            finish('Waiting for response to finish');
+            finish('');
             const session = { conversation: identity(), limit: attemptLimit, autosend: true };
             run = session;
-            autosendButton.textContent = 'Cancel autosend';
+            autosendButton.textContent = 'Cancel queued draw';
             setRetryButtonActive(autosendButton, true);
             void autosend(session);
         });
@@ -1173,7 +1173,7 @@
                 click(session, send, 'Send');
                 session.autosend = false;
                 session.manualPrompt = true;
-                autosendButton.textContent = 'Autosend "d"';
+                autosendButton.textContent = 'Draw when ready';
                 setRetryButtonActive(autosendButton, false);
                 button.textContent = 'Stop retries';
                 setRetryButtonActive(button, true);
