@@ -897,9 +897,10 @@
 
     // The timeline only mounts a small window of turns. Keep discovered images independent
     // of those DOM nodes and own the blob URLs so unmounting cannot revoke our images.
-    // Bounded retries through ChatGPT's own edit/send controls.
+    // ChatGPT drawing controls, generation notifications, and optional debug export.
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
-    function createChatGPTRetries(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
+    const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
+    function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
         if (!isChatGPTHost()) return null;
         const turnSelector = '[data-turn-key]';
         const editorSelector = '[contenteditable="true"][aria-label="Edit message"], textarea';
@@ -922,7 +923,28 @@
             border: '1px solid #888', borderRadius: '5px', padding: '10px 8px', minHeight: '44px' });
         const autosendButton = button.cloneNode(true);
         autosendButton.textContent = 'Draw when ready';
-        panel.append(autosendButton, button, status);
+        const debugEvents = [];
+        function debugLog(event, detail = {}) {
+            const entry = { time: new Date().toISOString(), event, ...detail };
+            debugEvents.push(entry);
+            if (debugEvents.length > 500) debugEvents.shift();
+            if (CHATGPT_SHOW_DEBUG_LOG) console.debug('[ImageViewer ChatGPT]', entry);
+        }
+        const debugButton = button.cloneNode(true);
+        debugButton.textContent = 'Debug log';
+        debugButton.hidden = !CHATGPT_SHOW_DEBUG_LOG;
+        if (!CHATGPT_SHOW_DEBUG_LOG) debugButton.style.display = 'none';
+        debugButton.style.gridRow = '4';
+        debugButton.addEventListener('click', () => {
+            const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), events: debugEvents }, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'imageviewer-chatgpt-debug.json';
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+        panel.append(autosendButton, button, status, debugButton);
         document.body.append(panel);
         const layoutStyle = document.createElement('style');
         layoutStyle.textContent = `
@@ -981,6 +1003,71 @@
             .filter((item) => !item.matches('[data-chatgpt-search-unit-key$=":user"]'))
             .map((item) => item.getAttribute('data-chatgpt-search-message-ids')).join('|');
 
+        // Observe generation independently of the retry controls. Historical images
+        // never chime unless their response was seen actively generating here.
+        let audioContext = null;
+        let soundConversation = identity();
+        let pendingSound = null;
+        const soundedResponses = new Set();
+        function unlockSound(event) {
+            if (!event.isTrusted || destroyed) return;
+            try {
+                const Audio = window.AudioContext || window.webkitAudioContext;
+                if (!Audio) return;
+                audioContext ||= new Audio();
+                if (audioContext.state === 'suspended') void audioContext.resume().catch(() => {});
+            } catch (_) { /* Audio may be unavailable or blocked by browser settings. */ }
+        }
+        document.addEventListener('pointerdown', unlockSound, true);
+        document.addEventListener('keydown', unlockSound, true);
+        function playGenerationChime() {
+            if (!audioContext || audioContext.state !== 'running') return;
+            try {
+                // A quiet ascending pair of sine tones, with soft attack and decay.
+                [523.25, 783.99].forEach((frequency, index) => {
+                    const start = audioContext.currentTime + index * 0.16;
+                    const tone = audioContext.createOscillator();
+                    const gain = audioContext.createGain();
+                    tone.type = 'sine';
+                    tone.frequency.value = frequency;
+                    gain.gain.setValueAtTime(0, start);
+                    gain.gain.linearRampToValueAtTime(0.07, start + 0.025);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.65);
+                    tone.connect(gain);
+                    gain.connect(audioContext.destination);
+                    tone.onended = () => { tone.disconnect(); gain.disconnect(); };
+                    tone.start(start);
+                    tone.stop(start + 0.7);
+                });
+            } catch (_) { /* Sound must never interrupt generation or retries. */ }
+        }
+        function checkGenerationSound() {
+            if (destroyed) return;
+            if (identity() !== soundConversation) {
+                soundConversation = identity();
+                pendingSound = null;
+            }
+            const turn = latest();
+            if (!turn) return;
+            // Temporary fallback markers disappear on completion. Duplicate IDs
+            // and DOM ordering also change without creating a different response.
+            const response = [...new Set(responseIds(turn).split(/[\s|]+/)
+                .filter(id => id && !/^fallback-turn-/.test(id)))].sort().join('|');
+            const token = soundConversation + '|' + key(turn) + '|' + response;
+            if (busy(turn)) {
+                pendingSound = token;
+                return;
+            }
+            if (pendingSound !== token || state(turn) !== 'complete') return;
+            if (!images(turn).some((img) => img.complete && img.naturalWidth > 0)) return;
+            pendingSound = null;
+            if (soundedResponses.has(token)) return;
+            soundedResponses.add(token);
+            playGenerationChime();
+        }
+        const soundObserver = new MutationObserver(checkGenerationSound);
+        soundObserver.observe(document.body, { childList: true, subtree: true, attributes: true,
+            attributeFilter: ['data-talvt-turn-state', 'data-chatgpt-search-message-ids', 'src'] });
         function setRetryButtonActive(item, active) {
             item.style.background = active ? '#51432b' : 'transparent';
             item.style.borderColor = active ? '#a58a55' : '#888';
@@ -1239,6 +1326,7 @@
             else if (run) finish('Stopped after manual input');
         }, true);
         const refresh = () => {
+            checkGenerationSound();
             if (run && identity() !== run.conversation) finish('Chat changed');
             const host = composer()?.querySelector('form[data-chatgpt-composer]');
             if (host !== layoutHost) {
@@ -1284,6 +1372,10 @@
         refresh();
         return { stop: () => finish('Retries stopped'), destroy: () => {
             destroyed = true;
+            soundObserver.disconnect();
+            document.removeEventListener('pointerdown', unlockSound, true);
+            document.removeEventListener('keydown', unlockSound, true);
+            if (audioContext) void audioContext.close().catch(() => {});
             finish(''); clearInterval(timer); layoutObserver.disconnect();
             if (layoutFrame != null) cancelAnimationFrame(layoutFrame);
             layoutHost?.classList.remove('iv-retry-side', 'iv-retry-stacked');
@@ -6458,7 +6550,7 @@
     };
     ivChatGPTNavigationDebug = createChatGPTNavigationDebug();
     ivChatGPTGallery = createChatGPTGallery();
-    createChatGPTRetries();
+    createChatGPTControls();
     } // End of init()
     
     // Run init when DOM is ready

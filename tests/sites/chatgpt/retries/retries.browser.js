@@ -52,7 +52,7 @@ function setup(limit = 3, text = 'Draw a tree') {
   sends = 0;
   promptText = text;
   mount();
-  controller = createChatGPTRetries(limit);
+  controller = createChatGPTControls(limit);
 }
 const start = () => document.querySelectorAll('#iv-chatgpt-retries button')[1].click();
 const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]').textContent;

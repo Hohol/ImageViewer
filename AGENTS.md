@@ -14,7 +14,8 @@
 - **Image eligibility** — Shared exclusion rules for clicks, navigation, and cache capture. Entry point: `isExcludedImage()`.
 - **Video viewing** — Fullscreen, playback controls, custom loops, and clip export; Grok Imagine also supports sequential and random video navigation. Entry points: `toggleVideoFullscreen()`, `getTargetVideo()`, `startLooping()`, `exportLoopFragment()`, and `navigateImagineVideo()`.
 - **ChatGPT gallery and image scan** — Caches images across virtualized history, preserves identities across grouped layouts, and deduplicates previews and pickers. Scans pause in hidden tabs and block manual scrolling; the cache resets on conversation changes. Entry point: `createChatGPTGallery()` → `scan()`.
-- **ChatGPT image retries** — Automatic retries for image generation. Entry point: `createChatGPTRetries()`.
+- **ChatGPT image retries** — Automatic retries for image generation. Entry point: `createChatGPTControls()`.
+- **ChatGPT debug log** — Downloadable debug log. Entry points: `createChatGPTControls()`, `CHATGPT_SHOW_DEBUG_LOG`.
 - **Local images (Chrome)** — Browses images in the containing directory alphabetically without wrapping, with fit/native resolution modes and separate local hotkeys. Requires Tampermonkey's "Allow access to file URLs" setting. Entry point: `initLocalImageViewer()`.
 
 ## Maintaining this file
