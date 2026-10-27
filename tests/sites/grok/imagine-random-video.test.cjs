@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { readSection } = require('../../support/source.cjs');
 
-function setup() {
+function setup(sessionStorage) {
   let selected, stripPresent = true, imageCalls = 0;
   const clicks = [];
   const toasts = [];
@@ -18,8 +18,9 @@ function setup() {
   selected = buttons[1];
   const strip = { querySelectorAll: () => buttons, querySelector: () => buttons.includes(selected) ? selected : null };
   const context = {
-    location: { pathname: '/imagine/post/example' }, isGrokHost: () => true,
-    document: { querySelector: () => stripPresent ? strip : null },
+    location: { pathname: '/imagine/post/example', origin: 'https://grok.com' }, isGrokHost: () => true,
+    URL, sessionStorage,
+    document: { querySelector: () => stripPresent ? strip : null, querySelectorAll: () => [] },
     overlay: null, ivChatGPTGallery: null,
     viewerHotkeysModalBlocksKeydown: () => false,
     isKeyboardTypingTarget: target => target.typing,
@@ -47,6 +48,80 @@ function setup() {
     visited: () => vm.runInContext('Array.from(imagineVisitedVideos).sort().join(",")', context),
     removeStrip: () => { stripPresent = false; } };
 }
+
+test('saved R opens loaded post links, skips hidden cards, and ignores repeats and typing', () => {
+  const h = setup();
+  h.context.location.pathname = '/imagine/saved';
+  const opened = [];
+  h.context.location.assign = url => opened.push(url);
+  const link = (href, visible = true) => ({ href, visibility: 'visible',
+    getClientRects: () => visible ? [{}] : [], click() { opened.push(this.href); } });
+  const first = link('/imagine/post/first?conversation=original');
+  const hidden = link('/imagine/post/hidden', false);
+  const invisible = link('/imagine/post/invisible');
+  invisible.visibility = 'hidden';
+  h.context.document.querySelectorAll = () => [hidden, first, invisible];
+  h.context.getComputedStyle = el => ({ visibility: el.visibility });
+  h.press({ key: 'r' });
+  assert.deepEqual(opened, [first.href]);
+  for (const guard of [{ repeat: true }, { target: { typing: true } }, { ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }]) h.press(guard);
+  assert.equal(opened.length, 1);
+  h.context.document.querySelectorAll = () => [];
+  h.press();
+  assert.deepEqual(opened, [first.href, first.href]);
+  assert.equal(h.imageCalls(), 0);
+  assert.equal(h.clicks.length, 0);
+});
+
+test('saved cache retains unmounted posts, deduplicates remounts, and captures only on saved pages', () => {
+  const h = setup();
+  const opened = [];
+  h.context.location.pathname = '/imagine/saved';
+  h.context.location.assign = url => opened.push(url);
+  h.context.getComputedStyle = () => ({ visibility: 'visible' });
+  const card = href => ({ href, getClientRects: () => [{}], click: () => opened.push(href) });
+  let cards = [card('/imagine/post/top?conversation=one')];
+  h.context.document.querySelectorAll = () => cards;
+  h.context.captureGrokSavedPosts();
+  cards = [card('/imagine/post/bottom?conversation=two')];
+  h.context.captureGrokSavedPosts();
+  cards = [card('/imagine/post/top?conversation=one')];
+  h.context.captureGrokSavedPosts();
+  assert.equal(vm.runInContext('grokSavedPostUrls.size', h.context), 2);
+  h.context.location.pathname = '/imagine/post/other';
+  cards = [card('/imagine/post/unrelated')];
+  h.context.captureGrokSavedPosts();
+  assert.equal(vm.runInContext('grokSavedPostUrls.size', h.context), 2);
+  h.context.location.pathname = '/imagine/saved';
+  cards = [];
+  vm.runInContext('Math.random = () => 0', h.context);
+  h.press();
+  vm.runInContext('Math.random = () => 0.999', h.context);
+  h.press();
+  assert.deepEqual(opened, ['/imagine/post/top?conversation=one', '/imagine/post/bottom?conversation=two']);
+});
+
+test('saved cache survives a new document and rejects unrelated stored URLs', () => {
+  const data = new Map();
+  const storage = { getItem: key => data.get(key) || null, setItem: (key, value) => data.set(key, value) };
+  const first = setup(storage);
+  first.context.location.pathname = '/imagine/saved';
+  const href = 'https://grok.com/imagine/post/top?conversation=original';
+  first.context.getComputedStyle = () => ({ visibility: 'visible' });
+  first.context.document.querySelectorAll = () => [{ href, getClientRects: () => [{}] }];
+  first.context.captureGrokSavedPosts();
+  const restored = setup(storage);
+  restored.context.location.pathname = '/imagine/saved';
+  const opened = [];
+  restored.context.location.assign = url => opened.push(url);
+  restored.press();
+  assert.deepEqual(opened, [href]);
+  storage.setItem('ivGrokSavedPostUrls', JSON.stringify([href, 'https://example.com/imagine/post/no', 'javascript:alert(1)', 'https://grok.com/settings']));
+  const filtered = setup(storage);
+  assert.equal(vm.runInContext('grokSavedPostUrls.size', filtered.context), 1);
+  storage.setItem('ivGrokSavedPostUrls', 'invalid json');
+  assert.equal(vm.runInContext('grokSavedPostUrls.size', setup(storage).context), 0);
+});
 
 test('Imagine R selects a different video in page, video fullscreen, and image overlay modes', () => {
   for (const mode of ['page', 'video-fullscreen', 'overlay']) {

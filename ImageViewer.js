@@ -3506,6 +3506,12 @@
             ],
         },
         {
+            title: 'Imagine saved',
+            items: [
+                ['R', 'Open random post seen in this session'],
+            ],
+        },
+        {
             title: 'Imagine videos',
             items: [
                 ['A / D', 'Previous / next video'],
@@ -3681,6 +3687,100 @@
             isGrokHost() &&
             (location.pathname === '/imagine/saved' || location.pathname.startsWith('/imagine/saved/'))
         );
+    }
+
+    function bindGrokSavedComposerFocus() {
+        if (!isGrokHost()) return;
+        let savedPage = false;
+        let allowFocus = false;
+        const composerSelector = '[contenteditable="true"][role="textbox"].query-bar-editor';
+        function sync() {
+            const nextSavedPage = isGrokImagineSavedPage();
+            if (nextSavedPage !== savedPage) {
+                savedPage = nextSavedPage;
+                allowFocus = false;
+            }
+            const active = document.activeElement;
+            if (savedPage && !allowFocus && active?.matches(composerSelector)) active.blur();
+        }
+        // Grok may focus the composer after rendering, or retain focus across routes.
+        document.addEventListener('focusin', sync, true);
+        document.addEventListener('pointerdown', (event) => {
+            sync();
+            if (savedPage && event.target.closest?.(composerSelector)) allowFocus = true;
+        }, true);
+        document.addEventListener('keydown', (event) => {
+            // Keep deliberate keyboard focus navigation available as well as clicks.
+            if (isGrokImagineSavedPage() && event.key === 'Tab') allowFocus = true;
+        }, true);
+        for (const method of ['pushState', 'replaceState']) {
+            const original = history[method];
+            history[method] = function (...args) {
+                const result = original.apply(this, args);
+                sync();
+                return result;
+            };
+        }
+        window.addEventListener('popstate', sync);
+        window.addEventListener('pageshow', sync);
+        sync();
+    }
+
+    // Keep URLs, not DOM nodes: Grok unmounts cards as they scroll out of range.
+    // Tab-scoped storage also survives navigation to unmounted posts and Back.
+    const GROK_SAVED_POST_CACHE_KEY = 'ivGrokSavedPostUrls';
+    const grokSavedPostUrls = new Set();
+    if (isGrokHost()) {
+        try {
+            const stored = JSON.parse(sessionStorage.getItem(GROK_SAVED_POST_CACHE_KEY) || '[]');
+            if (Array.isArray(stored)) {
+                for (const href of stored) {
+                    if (typeof href !== 'string') continue;
+                    try {
+                        const url = new URL(href, location.origin);
+                        if (url.origin === location.origin && /^\/imagine\/post\/[^/]+\/?$/.test(url.pathname)) {
+                            grokSavedPostUrls.add(url.href);
+                        }
+                    } catch (_) {}
+                }
+            }
+        } catch (_) {}
+    }
+
+    function captureGrokSavedPosts() {
+        const mounted = new Map();
+        if (!isGrokImagineSavedPage()) return mounted;
+        let changed = false;
+        document.querySelectorAll(
+            '[class~="group/compact-card"] a[href^="/imagine/post/"], ' +
+            'div.grid.w-full.select-none a[href^="/imagine/post/"]'
+        ).forEach((link) => {
+            if (!link.getClientRects().length || getComputedStyle(link).visibility === 'hidden') {
+                changed = grokSavedPostUrls.delete(link.href) || changed;
+                return;
+            }
+            if (!grokSavedPostUrls.has(link.href)) {
+                grokSavedPostUrls.add(link.href);
+                changed = true;
+            }
+            mounted.set(link.href, link);
+        });
+        if (changed) {
+            try {
+                sessionStorage.setItem(GROK_SAVED_POST_CACHE_KEY, JSON.stringify(Array.from(grokSavedPostUrls)));
+            } catch (_) {} // Keep the in-memory cache usable if storage is unavailable.
+        }
+        return mounted;
+    }
+
+    function openRandomGrokSavedPost() {
+        const mounted = captureGrokSavedPosts();
+        const urls = Array.from(grokSavedPostUrls);
+        if (!urls.length) return;
+        const url = urls[pickRandomIndex(urls.length, -1)];
+        const link = mounted.get(url);
+        if (link) link.click();
+        else location.assign(url);
     }
 
     /** Keep/Unkeep buttons and the keep-status filter for Grok Imagine. */
@@ -3887,6 +3987,7 @@
         requestAnimationFrame(() => {
             grokSavedKeepSyncScheduled = false;
             syncGrokImagineSavedKeepUi();
+            captureGrokSavedPosts();
         });
     }
 
@@ -5747,6 +5848,7 @@
     }
 
     bindImagineVisitedPageLifecycle();
+    bindGrokSavedComposerFocus();
     window.addEventListener('popstate', () => {
         scheduleImaginePostDeleteButtonsSync();
         scheduleGrokImagineSavedKeepSync();
@@ -6356,10 +6458,16 @@
             return;
         }
 
-        // R: Imagine owns video selection; other pages keep random image navigation.
+        // R: saved posts, Imagine videos, or random images on other pages.
         if (e.code === 'KeyR') {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             if (isKeyboardTypingTarget(e.target)) return;
+            if (isGrokImagineSavedPage()) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (!e.repeat) openRandomGrokSavedPost();
+                return;
+            }
             if (isGrokImaginePage()) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
