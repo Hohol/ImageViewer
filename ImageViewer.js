@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.42
+// @version      2.43
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1006,6 +1006,28 @@
         // Observe generation independently of the retry controls. Historical images
         // never chime unless their response was seen actively generating here.
         let audioContext = null;
+        let unreadGeneration = false;
+        let generationFinished = false;
+        let baseTitle = document.title;
+        let writtenTitle = null;
+        function updateGenerationTitle() {
+            // Preserve ChatGPT's own renames, including titles that start with emoji.
+            if (document.title !== writtenTitle) baseTitle = document.title;
+            if (!document.hidden) unreadGeneration = false;
+            const generating = !generationFinished && (busy(latest()) || (run && !run.autosend));
+            const prefix = destroyed ? '' : generating ? '⏳ ' : unreadGeneration === 'failed' ? '❌ ' : unreadGeneration ? '✅ ' : '';
+            writtenTitle = prefix + baseTitle;
+            if (document.title !== writtenTitle) document.title = writtenTitle;
+        }
+        function markGenerationFailure() {
+            generationFinished = true;
+            unreadGeneration = document.hidden ? 'failed' : false;
+            updateGenerationTitle();
+        }
+        const titleObserver = new MutationObserver(updateGenerationTitle);
+        titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+        document.addEventListener('visibilitychange', updateGenerationTitle);
+
         let soundConversation = identity();
         let pendingSound = null;
         const soundedResponses = new Set();
@@ -1046,7 +1068,10 @@
             if (identity() !== soundConversation) {
                 soundConversation = identity();
                 pendingSound = null;
+                unreadGeneration = false;
+                generationFinished = false;
             }
+            updateGenerationTitle();
             const turn = latest();
             if (!turn) return;
             // Temporary fallback markers disappear on completion. Duplicate IDs
@@ -1055,6 +1080,9 @@
                 .filter(id => id && !/^fallback-turn-/.test(id)))].sort().join('|');
             const token = soundConversation + '|' + key(turn) + '|' + response;
             if (busy(turn)) {
+                generationFinished = false;
+                unreadGeneration = false;
+                updateGenerationTitle();
                 pendingSound = token;
                 return;
             }
@@ -1063,6 +1091,9 @@
             pendingSound = null;
             if (soundedResponses.has(token)) return;
             soundedResponses.add(token);
+            generationFinished = true;
+            unreadGeneration = document.hidden;
+            updateGenerationTitle();
             playGenerationChime();
         }
         const soundObserver = new MutationObserver(checkGenerationSound);
@@ -1073,13 +1104,15 @@
             item.style.borderColor = active ? '#a58a55' : '#888';
             item.style.color = active ? '#f2dfb5' : 'inherit';
         }
-        function finish(message) {
+        function finish(message, failed = false) {
+            if (failed) markGenerationFailure();
             setRetryButtonActive(button, false);
             setRetryButtonActive(autosendButton, false);
             run = null;
             button.textContent = 'Retry image';
             autosendButton.textContent = 'Draw when ready';
             status.textContent = message;
+            updateGenerationTitle();
         }
         function check(session) {
             if (run !== session) throw new Error('cancelled');
@@ -1104,7 +1137,7 @@
         async function retry(session) {
             try {
                 if (session.manualPrompt) {
-                    status.textContent = 'Waiting for submitted prompt';
+                    status.textContent = `Attempt 0/${session.limit} · Generating`;
                     await waitFor(session, () => {
                         const current = latest();
                         if (!current || current.querySelector(editorSelector) || prompt(current).trim() !== 'd') return false;
@@ -1125,8 +1158,9 @@
                 session.turnKey = key(turn);
                 session.prompt = prompt(turn);
                 // An existing generation is allowed to finish before spending a retry.
-                if (busy(turn) || session.manualPrompt) {
-                    status.textContent = 'Waiting for current generation';
+                const waitingForInitial = busy(turn) || session.manualPrompt;
+                if (waitingForInitial) {
+                    status.textContent = `Attempt 0/${session.limit} · Generating`;
                     let completedAt = 0;
                     await waitFor(session, () => {
                         const current = latest();
@@ -1149,10 +1183,14 @@
                     turn = latest();
                     if (key(turn) !== session.turnKey || prompt(turn) !== session.prompt) throw new Error('Message changed');
                     if (busy(turn)) throw new Error('Another generation started');
-                    if (attempt > 1) {
-                        status.textContent = 'Retrying in 3 seconds…';
+                    if (attempt > 1 || waitingForInitial) {
                         const until = Date.now() + 3000;
-                        await waitFor(session, () => Date.now() >= until, 4000, 'Retry delay interrupted');
+                        await waitFor(session, () => {
+                            const remaining = Math.ceil((until - Date.now()) / 1000);
+                            if (remaining <= 0) return true;
+                            status.textContent = `Attempt ${attempt}/${session.limit} · Retry in ${remaining}s`;
+                            return false;
+                        }, 4000, 'Retry delay interrupted');
                     }
                     turn = latest();
                     if (key(turn) !== session.turnKey || prompt(turn) !== session.prompt || busy(turn)) {
@@ -1204,9 +1242,9 @@
                         return;
                     }
                 }
-                finish(`Attempt limit reached (${session.limit})`);
+                finish(`Attempt limit reached (${session.limit})`, true);
             } catch (error) {
-                if (run === session) finish(error.message);
+                if (run === session) finish(error.message, true);
             }
         }
         button.addEventListener('click', () => {
@@ -1238,7 +1276,6 @@
                 }, 15 * 60 * 1000, 'Response timed out; autosend stopped');
                 const input = composer()?.querySelector('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="Ask ChatGPT"], textarea');
                 if (!input) throw new Error('Prompt field is unavailable');
-                if ((input.value ?? input.textContent ?? '').trim()) throw new Error('Autosend stopped: prompt field contains a draft');
                 check(session);
                 automaticClick = true;
                 try {
@@ -1246,8 +1283,15 @@
                     if (input instanceof HTMLTextAreaElement) {
                         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'd');
                         input.dispatchEvent(new Event('input', { bubbles: true }));
-                    } else if (!document.execCommand('insertText', false, 'd')) {
-                        throw new Error('Could not enter d in the prompt field');
+                    } else {
+                        const selection = window.getSelection();
+                        const range = document.createRange();
+                        range.selectNodeContents(input);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                        if (!document.execCommand('insertText', false, 'd')) {
+                            throw new Error('Could not enter d in the prompt field');
+                        }
                     }
                 } finally { automaticClick = false; }
                 const send = await waitFor(session, () => {
@@ -1266,7 +1310,7 @@
                 setRetryButtonActive(button, true);
                 await retry(session);
             } catch (error) {
-                if (run === session) finish(error.message);
+                if (run === session) finish(error.message, true);
             }
         }
         function isPromptSend(item) {
@@ -1373,6 +1417,8 @@
         return { stop: () => finish('Retries stopped'), destroy: () => {
             destroyed = true;
             soundObserver.disconnect();
+            titleObserver.disconnect();
+            document.removeEventListener('visibilitychange', updateGenerationTitle);
             document.removeEventListener('pointerdown', unlockSound, true);
             document.removeEventListener('keydown', unlockSound, true);
             if (audioContext) void audioContext.close().catch(() => {});

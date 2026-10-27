@@ -211,12 +211,12 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   const composerInput = composerForm.querySelector('[contenteditable]');
   composerInput.textContent = ' d ';
   composerForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  check(status() === 'Waiting for submitted prompt', 'manual d arms retries before the new turn appears');
+  check(status() === 'Attempt 0/3 · Generating', 'manual d arms retries before the new turn appears');
   generation++;
   promptText = 'd';
   mount('in_progress');
   await delay(350);
-  check(sends === 0 && status() === 'Waiting for current generation', 'd waits for initial generation without spending a retry');
+  check(sends === 0 && status() === 'Attempt 0/3 · Generating', 'd waits for initial generation without spending a retry');
   mount('complete', true);
   await until(() => status() === 'Image generated (0 retries)');
 
@@ -227,6 +227,10 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   generation++;
   promptText = 'd';
   mount('complete');
+  for (const seconds of [3, 2, 1]) {
+    await until(() => status() === `Attempt 1/3 · Retry in ${seconds}s`);
+    check(sends === 0, `initial failure countdown shows ${seconds}s before retrying`);
+  }
   await until(() => status() === 'Image generated (1 retries)');
   check(sends === 1, 'failed manual d automatically retries; automatic d submissions do not restart the loop');
 
@@ -237,7 +241,7 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   manualEditForm.append(manualEditInput);
   root.firstElementChild.append(manualEditForm);
   manualEditForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  check(status() === 'Waiting for submitted prompt', 'manually edited d also arms retries');
+  check(status() === 'Attempt 0/3 · Generating', 'manually edited d also arms retries');
   controller.stop();
   generation++;
   promptText = 'd';
@@ -289,8 +293,8 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   setup();
   composerInput.textContent = 'My draft';
   autosend();
-  await until(() => status().includes('contains a draft'));
-  check(newSends === 1 && composerInput.textContent === 'My draft', 'autosend preserves an existing draft');
+  await until(() => status() === 'Image generated (0 retries)');
+  check(newSends === 2 && composerInput.textContent === '', 'autosend replaces an existing draft with d and sends it');
 
   setup();
   composerInput.textContent = '';
@@ -298,7 +302,7 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   autosend();
   document.querySelector('[data-map-composer-conversation]').setAttribute('data-map-composer-conversation', 'autosend-other-chat');
   await until(() => status() === 'Chat changed');
-  check(newSends === 1, 'chat navigation cancels pending autosend');
+  check(newSends === 2, 'chat navigation cancels pending autosend');
   nativeSend.remove();
   controller.destroy();
 })().then(() => finish()).catch(error => { controller?.destroy(); finish(error); });
