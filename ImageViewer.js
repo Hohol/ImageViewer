@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.43
+// @version      2.44
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -1007,13 +1007,31 @@
         // never chime unless their response was seen actively generating here.
         let audioContext = null;
         let unreadGeneration = false;
+        let unreadImageTurn = null;
         let generationFinished = false;
         let baseTitle = document.title;
         let writtenTitle = null;
+        function generatedImageInView() {
+            const turn = latest();
+            if (!turn || key(turn) !== unreadImageTurn) return false;
+            const viewport = timeline()?.getBoundingClientRect();
+            if (!viewport) return false;
+            return images(turn).some(img => {
+                if (!img.complete || !img.naturalWidth) return false;
+                const rect = img.getBoundingClientRect();
+                const style = getComputedStyle(img);
+                return style.visibility !== 'hidden' && style.display !== 'none' &&
+                    rect.width > 0 && rect.height > 0 &&
+                    Math.min(rect.right, viewport.right, window.innerWidth) > Math.max(rect.left, viewport.left, 0) &&
+                    Math.min(rect.bottom, viewport.bottom, window.innerHeight) > Math.max(rect.top, viewport.top, 0);
+            });
+        }
         function updateGenerationTitle() {
             // Preserve ChatGPT's own renames, including titles that start with emoji.
             if (document.title !== writtenTitle) baseTitle = document.title;
-            if (!document.hidden) unreadGeneration = false;
+            if (!document.hidden && (unreadGeneration === 'failed' || (unreadGeneration && generatedImageInView()))) {
+                unreadGeneration = false;
+            }
             const generating = !generationFinished && (busy(latest()) || (run && !run.autosend));
             const prefix = destroyed ? '' : generating ? '⏳ ' : unreadGeneration === 'failed' ? '❌ ' : unreadGeneration ? '✅ ' : '';
             writtenTitle = prefix + baseTitle;
@@ -1092,7 +1110,8 @@
             if (soundedResponses.has(token)) return;
             soundedResponses.add(token);
             generationFinished = true;
-            unreadGeneration = document.hidden;
+            unreadGeneration = true;
+            unreadImageTurn = key(turn);
             updateGenerationTitle();
             playGenerationChime();
         }

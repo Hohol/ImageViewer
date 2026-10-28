@@ -12,9 +12,14 @@ function harness() {
     createOscillator() { return { frequency: {}, connect() {}, start() { tones++; }, stop() {} }; }
     createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
   }
-  const context = vm.createContext({ window: { AudioContext }, destroyed: false, run: null,
+  const context = vm.createContext({ window: { AudioContext, innerWidth: 1000, innerHeight: 800 }, destroyed: false, run: null,
     identity: () => chat, latest: () => turn, responseIds: t => t.response, key: t => t.id,
-    busy: t => t.busy, state: t => t.state, images: t => t.images,
+    busy: t => t.busy, state: t => t.state, images: t => t.images.map(img => {
+      img.getBoundingClientRect ||= () => ({ left: 10, right: 110, top: 10, bottom: 110, width: 100, height: 100 });
+      return img;
+    }),
+    timeline: () => ({ getBoundingClientRect: () => ({ left: 0, right: 1000, top: 0, bottom: 700 }) }),
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
     document: { title: 'My chat', hidden: false, addEventListener() {}, body: {}, head: {} }, MutationObserver: class { observe() {} } });
   vm.runInContext(block, context);
   context.unlockSound({ isTrusted: true });
@@ -124,5 +129,33 @@ test('error outcomes mark the tab failed, while cancellation does not', () => {
   doc.hidden = false; h.context.updateGenerationTitle();
   doc.hidden = true;
   h.context.finish('Retries stopped');
+  assert.equal(doc.title, 'My chat');
+});
+
+test('unseen success stays marked after returning to a scrolled-up tab until image enters view', () => {
+  const h = harness(), doc = h.context.document;
+  doc.hidden = true; h.turn.busy = true; h.check();
+  h.turn.busy = false;
+  let top = 900;
+  h.turn.images = [{ complete: true, naturalWidth: 100,
+    getBoundingClientRect: () => ({ left: 10, right: 110, top, bottom: top + 100, width: 100, height: 100 }) }];
+  h.check(); assert.equal(doc.title, '✅ My chat');
+  doc.hidden = false; h.context.updateGenerationTitle();
+  assert.equal(doc.title, '✅ My chat');
+  top = 750; h.check(); // Inside window, but below the chat scroll viewport.
+  assert.equal(doc.title, '✅ My chat');
+  top = 600; h.check();
+  assert.equal(doc.title, 'My chat');
+});
+test('success in a visible but scrolled-up tab remains unread, including while its turn is unmounted', () => {
+  const h = harness(), doc = h.context.document;
+  h.turn.busy = true; h.check(); h.turn.busy = false;
+  h.turn.images = [{ complete: true, naturalWidth: 100,
+    getBoundingClientRect: () => ({ left: 10, right: 110, top: -200, bottom: -100, width: 100, height: 100 }) }];
+  h.check(); assert.equal(doc.title, '✅ My chat');
+  h.turn.id = 'older-turn';
+  h.turn.images[0].getBoundingClientRect = () => ({ left: 10, right: 110, top: 10, bottom: 110, width: 100, height: 100 });
+  h.check(); assert.equal(doc.title, '✅ My chat');
+  h.turn.id = 'a'; h.check();
   assert.equal(doc.title, 'My chat');
 });
