@@ -3582,6 +3582,7 @@
                 ['A / D', 'Previous / next video'],
                 ['r', 'Random unvisited video'],
                 ['R', 'Random video'],
+                ['X', 'Delete selected item (press twice to confirm)'],
             ],
         },
         {
@@ -4140,6 +4141,7 @@
             captureGrokSavedPosts();
             syncGrokPostBackLink();
             restoreGrokJumpSound();
+            syncImagineSelectionAfterDeletion();
         });
     }
 
@@ -4631,6 +4633,36 @@
         return true;
     }
 
+    let imagineDeletionSelection = null;
+
+    function syncImagineSelectionAfterDeletion() {
+        const strip = isGrokImaginePage() && imaginePostFilmstripScrollEl();
+        if (!strip) {
+            imagineDeletionSelection = null;
+            return;
+        }
+        const buttons = collectImagineVideoButtons(Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]')));
+        const byId = new Map(buttons.map((btn) => [imaginePostIdFromFilmstripButton(btn), btn]).filter(([id]) => id));
+        const selected = imaginePostIdFromFilmstripButton(getImaginePostSelectedFilmstripButton());
+        const previous = imagineDeletionSelection;
+        imagineDeletionSelection = { path: location.pathname, ids: Array.from(byId.keys()), selected };
+        if (!previous || !previous.selected || byId.has(previous.selected)) return;
+        // A different post can replace the entire strip; that is not a deletion.
+        const routeId = location.pathname.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
+        if (previous.path !== location.pathname && !previous.ids.includes(routeId)) return;
+        const index = previous.ids.indexOf(previous.selected);
+        if (index < 0) return;
+        const nextId = previous.ids.slice(index + 1).find((id) => byId.has(id)) ||
+            previous.ids.slice(0, index).reverse().find((id) => byId.has(id));
+        const target = byId.get(nextId);
+        if (!target) return;
+        imagineDeletionSelection.selected = nextId;
+        // Use Grok's normal selection so its hero/fullscreen player updates too.
+        if (overlay) hideGallery();
+        target.click();
+        showImagineVideoIndex(target, buttons);
+    }
+
     function imaginePostIdFromFilmstripButton(btn) {
         if (!btn) return null;
         let id = imaginePostIdFromImgElement(btn.querySelector('img'));
@@ -4704,8 +4736,9 @@
         return getImaginePostHeroImageMediaId(root);
     }
 
-    function hideImaginePostDomForDeletedMediaId(root, mediaId) {
+    function hideImaginePostDomForDeletedMediaId(root, mediaId, updateSelection = true) {
         if (!mediaId) return;
+        if (updateSelection) syncImagineSelectionAfterDeletion();
         const norm = String(mediaId).toLowerCase();
         const hideEl = (el) => {
             if (el && el.style) el.style.display = 'none';
@@ -4721,6 +4754,7 @@
                 }
             });
         }
+        if (updateSelection) syncImagineSelectionAfterDeletion();
     }
 
     function collectImaginePostMediaIdsInDomOrder(root, debugRecords) {
@@ -5387,6 +5421,9 @@
                 if (deletedOk.length) {
                     grokRecentlyDeletedAddIds(deletedOk);
                     scheduleGrokImagineSavedKeepSync();
+                    syncImagineSelectionAfterDeletion();
+                    for (const id of deletedOk) hideImaginePostDomForDeletedMediaId(root, id, false);
+                    syncImagineSelectionAfterDeletion();
                 }
                 btn.disabled = false;
                 grokDeleteAllDisarm();
@@ -5488,9 +5525,11 @@
                     if (deletedOk.length) {
                         grokRecentlyDeletedAddIds(deletedOk);
                         scheduleGrokImagineSavedKeepSync();
+                        syncImagineSelectionAfterDeletion();
                         for (let k = 0; k < deletedOk.length; k++) {
-                            hideImaginePostDomForDeletedMediaId(root, deletedOk[k]);
+                            hideImaginePostDomForDeletedMediaId(root, deletedOk[k], false);
                         }
+                        syncImagineSelectionAfterDeletion();
                     }
                     exBtn.disabled = false;
                     grokDeleteExceptDisarm();
@@ -5983,7 +6022,7 @@
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['src', 'class', 'style', 'hidden'],
+            attributeFilter: ['src', 'class', 'style', 'hidden', 'tabindex'],
         });
     } else {
         document.addEventListener('DOMContentLoaded', () => {
@@ -5995,7 +6034,7 @@
                 childList: true,
                 subtree: true,
                 attributes: true,
-                attributeFilter: ['src', 'class', 'style', 'hidden'],
+                attributeFilter: ['src', 'class', 'style', 'hidden', 'tabindex'],
             });
         });
     }
@@ -6612,6 +6651,33 @@
             e.preventDefault();
             e.stopImmediatePropagation();
             navigateImagineVideo(e.code === 'KeyA' ? -1 : 1);
+            return;
+        }
+
+        // Use the same button state and pending media ID in page and fullscreen modes.
+        if (e.code === 'KeyX' && isGrokHost() && location.pathname.startsWith('/imagine/post/')) {
+            if (e.metaKey || e.ctrlKey || e.altKey || isKeyboardTypingTarget(e.target)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (e.repeat) return;
+            const button = document.getElementById(IV_GROK_DELETE_SELECTED_BTN_ID);
+            if (!button || button.disabled) return;
+            button.click();
+            if (button.dataset.ivGrokSelArmed === '1') {
+                const strip = imaginePostFilmstripScrollEl();
+                const videos = strip ? collectImagineVideoButtons(Array.from(
+                    strip.querySelectorAll('button[data-filmstrip-item="true"]'))) : [];
+                const selected = getImaginePostSelectedFilmstripButton();
+                const index = videos.findIndex((video) => button.dataset.ivGrokPendingDeleteId
+                    ? imaginePostIdFromFilmstripButton(video) === button.dataset.ivGrokPendingDeleteId
+                    : video === selected);
+                const position = index >= 0 ? ` (${index + 1}/${videos.length})` : '';
+                button._ivGrokDeleteToast = 'Press X again to delete' + position;
+                showViewerToast(button._ivGrokDeleteToast, IV_GROK_DELETE_ARM_MS);
+            } else {
+                if (button._ivGrokDeleteToast) hideViewerToast(button._ivGrokDeleteToast);
+                delete button._ivGrokDeleteToast;
+            }
             return;
         }
 

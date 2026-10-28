@@ -27,7 +27,7 @@ function setup(localStorage) {
     isKeyboardTypingTarget: target => target.typing,
     hideGallery: () => { context.overlay = null; },
     showViewerToast: (message, duration) => { toasts.push({ message, duration }); },
-    imaginePostIdFromFilmstripButton: btn => btn.name,
+    imaginePostIdFromFilmstripButton: btn => btn?.name || null,
     window: { addEventListener: (name, fn) => { listeners[name] = fn; } },
     history: {
       pushState: (_state, _title, path) => { context.location.pathname = path; },
@@ -224,6 +224,79 @@ test('random post sound handoff restores muted and unmuted state after a full na
     assert.equal(video.muted, !muted, 'explicit user interaction releases the handoff');
     assert.equal(data.size, 0);
   }
+});
+
+test('X delegates to the selected-delete button in page and fullscreen modes with confirmation toast', () => {
+  for (const fullscreen of [false, true]) {
+    const h = setup();
+    if (fullscreen) h.context.document.fullscreenElement = { tagName: 'VIDEO' };
+    h.context.IV_GROK_DELETE_SELECTED_BTN_ID = 'iv-grok-delete-selected-media';
+    h.context.IV_GROK_DELETE_ARM_MS = 10000;
+    const hidden = [];
+    h.context.hideViewerToast = message => hidden.push(message);
+    let clicks = 0;
+    const button = { dataset: {}, disabled: false, click() {
+      clicks++;
+      if (this.dataset.ivGrokSelArmed) {
+        delete this.dataset.ivGrokSelArmed;
+        this.disabled = true;
+      } else this.dataset.ivGrokSelArmed = '1';
+    } };
+    h.context.document.getElementById = id => {
+      assert.equal(id, 'iv-grok-delete-selected-media');
+      return button;
+    };
+    const press = overrides => h.press({ code: 'KeyX', key: 'x', ...overrides });
+    assert.equal(press().stopped, true);
+    assert.equal(clicks, 1);
+    assert.deepEqual(h.toasts.at(-1), { message: 'Press X again to delete (1/3)', duration: 10000 });
+    for (const guard of [{ repeat: true }, { ctrlKey: true }, { metaKey: true }, { altKey: true },
+      { target: { typing: true } }, { isComposing: true }]) press(guard);
+    assert.equal(clicks, 1);
+    press();
+    assert.equal(clicks, 2);
+    assert.deepEqual(hidden, ['Press X again to delete (1/3)']);
+    press();
+    assert.equal(clicks, 2, 'disabled deletion cannot be submitted again');
+    button.disabled = false;
+    h.context.location.pathname = '/imagine/saved';
+    assert.equal(press().prevented, undefined);
+    assert.equal(clicks, 2);
+  }
+});
+
+test('deleting the selected video advances next, falls back previous, and skips hidden videos', () => {
+  for (const fullscreen of [false, true]) {
+    for (const mode of ['remove', 'hide']) {
+      const h = setup();
+      if (fullscreen) h.context.document.fullscreenElement = { tagName: 'VIDEO' };
+      h.context.syncImagineSelectionAfterDeletion();
+      if (mode === 'remove') h.buttons.splice(1, 1);
+      else h.buttons[1].parentElement = { style: { display: 'none' } };
+      h.context.syncImagineSelectionAfterDeletion();
+      assert.deepEqual(h.clicks, ['second']);
+      h.select(h.buttons.find(btn => btn.name === 'third'));
+      h.context.syncImagineSelectionAfterDeletion();
+      h.buttons.splice(h.buttons.findIndex(btn => btn.name === 'third'), 1);
+      h.context.syncImagineSelectionAfterDeletion();
+      assert.deepEqual(h.clicks, ['second', 'second']);
+      h.buttons.splice(h.buttons.findIndex(btn => btn.name === 'second'), 1);
+      h.context.syncImagineSelectionAfterDeletion();
+      assert.equal(h.clicks.length, 2, 'no video survivor: do not select an image');
+    }
+  }
+});
+
+test('deletion tracking preserves selection for unselected deletions and unrelated page changes', () => {
+  const h = setup();
+  h.context.syncImagineSelectionAfterDeletion();
+  h.buttons.pop();
+  h.context.syncImagineSelectionAfterDeletion();
+  assert.equal(h.clicks.length, 0);
+  h.context.location.pathname = '/imagine/post/unrelated';
+  h.buttons.splice(1, 1);
+  h.context.syncImagineSelectionAfterDeletion();
+  assert.equal(h.clicks.length, 0);
 });
 
 test('Imagine R selects a different video in page, video fullscreen, and image overlay modes', () => {
