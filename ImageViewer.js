@@ -3754,6 +3754,37 @@
         );
     }
 
+    function syncGrokPostBackLink() {
+        if (!isGrokHost() || !location.pathname.startsWith('/imagine/post/')) return;
+        document.querySelectorAll('a[aria-label="Back"][href^="/imagine"]').forEach((link) => {
+            if (link.getAttribute('href') !== '/imagine/saved') link.setAttribute('href', '/imagine/saved');
+        });
+    }
+
+    function handleGrokPostBack(e) {
+        if (!isGrokHost() || !location.pathname.startsWith('/imagine/post/')) return false;
+        if (e.type === 'click') {
+            if (!e.target.closest?.('a[aria-label="Back"][href^="/imagine"]')) return false;
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false;
+        } else {
+            if (e.key !== 'Escape' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false;
+            // Escape still closes overlays, fullscreen, and site dialogs first.
+            if (overlay || isFullscreenApiActive()) return false;
+            const openPopup = Array.from(document.querySelectorAll(
+                '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]'
+            )).some((popup) => {
+                if (!popup.getClientRects().length || popup.closest('[hidden], [aria-hidden="true"], [data-state="closed"]')) return false;
+                const style = getComputedStyle(popup);
+                return style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none';
+            });
+            if (openPopup) return false;
+        }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (!e.repeat) location.assign('/imagine/saved');
+        return true;
+    }
+
     function bindGrokSavedComposerFocus() {
         if (!isGrokHost()) return;
         let savedPage = false;
@@ -3792,12 +3823,12 @@
     }
 
     // Keep URLs, not DOM nodes: Grok unmounts cards as they scroll out of range.
-    // Tab-scoped storage also survives navigation to unmounted posts and Back.
+    // Local storage preserves loaded post URLs across tabs and browser sessions.
     const GROK_SAVED_POST_CACHE_KEY = 'ivGrokSavedPostUrls';
     const grokSavedPostUrls = new Set();
     if (isGrokHost()) {
         try {
-            const stored = JSON.parse(sessionStorage.getItem(GROK_SAVED_POST_CACHE_KEY) || '[]');
+            const stored = JSON.parse(localStorage.getItem(GROK_SAVED_POST_CACHE_KEY) || '[]');
             if (Array.isArray(stored)) {
                 for (const href of stored) {
                     if (typeof href !== 'string') continue;
@@ -3832,7 +3863,7 @@
         });
         if (changed) {
             try {
-                sessionStorage.setItem(GROK_SAVED_POST_CACHE_KEY, JSON.stringify(Array.from(grokSavedPostUrls)));
+                localStorage.setItem(GROK_SAVED_POST_CACHE_KEY, JSON.stringify(Array.from(grokSavedPostUrls)));
             } catch (_) {} // Keep the in-memory cache usable if storage is unavailable.
         }
         return mounted;
@@ -4053,6 +4084,7 @@
             grokSavedKeepSyncScheduled = false;
             syncGrokImagineSavedKeepUi();
             captureGrokSavedPosts();
+            syncGrokPostBackLink();
         });
     }
 
@@ -5914,6 +5946,7 @@
 
     bindImagineVisitedPageLifecycle();
     bindGrokSavedComposerFocus();
+    window.addEventListener('click', handleGrokPostBack, true);
     window.addEventListener('popstate', () => {
         scheduleImaginePostDeleteButtonsSync();
         scheduleGrokImagineSavedKeepSync();
@@ -6444,6 +6477,8 @@
     function handleViewerKeydown(e) {
         if (viewerHotkeysModalBlocksKeydown(e)) return;
         if (e.isComposing || e.keyCode === 229) return;
+
+        if (handleGrokPostBack(e)) return;
 
         if (ivChatGPTGallery?.scanning) {
             if (e.key === 'Escape') {

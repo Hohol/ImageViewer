@@ -53,7 +53,8 @@ belongs in `support/`.
 | Shared image eligibility | Common exclusions and ChatGPT generated-image exceptions agree for clicking and navigation |
 | Gemini integration | Inline generated images, lightbox images, source/markup eligibility, upload-preview exclusions |
 | Grok integration | Chat/Imagine image eligibility, hero/card layouts, filmstrip and other thumbnail exclusions; saved-media filters and deletion controls remain untested |
-| Imagine saved navigation | R caches loaded post URLs across unmounts, in-app navigation, and full navigation in the same tab, validates restored URLs, deduplicates remounts, preserves conversation URLs, skips hidden links, and respects typing, modifiers, composition, repeated keys, and empty grids (mocked DOM) |
+| Imagine post return navigation | Back and page-level Escape go to Saved; fullscreen, overlay, menu dismissal, unrelated clicks, and modified clicks retain priority (mocked DOM) |
+| Imagine saved navigation | R caches loaded post URLs across unmounts, in-app navigation, and browser sessions via local storage, validates restored URLs, deduplicates remounts, preserves conversation URLs, skips hidden links, and respects typing, modifiers, composition, repeated keys, and empty grids (mocked DOM) |
 | Imagine video navigation | R random selection, lowercase r unvisited selection and page-leave reset, A/D previous/next routing in page/fullscreen modes, no wrapping, image skipping, avoiding the current video, deletions and hidden wrappers, updated index totals, empty/single-video cases, typing and modifier guards (mocked DOM) |
 | Other shared viewer features | No dedicated tests yet for fit/zoom, native browser fullscreen behavior, clipboard, new-tab opening, hotkeys, video controls, or loop export |
 

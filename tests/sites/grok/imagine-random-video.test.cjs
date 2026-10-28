@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { readSection } = require('../../support/source.cjs');
 
-function setup(sessionStorage) {
+function setup(localStorage) {
   let selected, stripPresent = true, imageCalls = 0;
   const clicks = [];
   const toasts = [];
@@ -19,7 +19,7 @@ function setup(sessionStorage) {
   const strip = { querySelectorAll: () => buttons, querySelector: () => buttons.includes(selected) ? selected : null };
   const context = {
     location: { pathname: '/imagine/post/example', origin: 'https://grok.com' }, isGrokHost: () => true,
-    URL, sessionStorage,
+    URL, localStorage,
     document: { querySelector: () => stripPresent ? strip : null, querySelectorAll: () => [] },
     overlay: null, ivChatGPTGallery: null,
     viewerHotkeysModalBlocksKeydown: () => false,
@@ -48,6 +48,54 @@ function setup(sessionStorage) {
     visited: () => vm.runInContext('Array.from(imagineVisitedVideos).sort().join(",")', context),
     removeStrip: () => { stripPresent = false; } };
 }
+
+test('post Back and Escape always navigate to Saved, retaining dismissal priorities', () => {
+  const h = setup();
+  const destinations = [];
+  h.context.location.assign = url => destinations.push(url);
+  h.context.isFullscreenApiActive = () => false;
+  h.context.document.querySelector = () => null;
+  const click = { type: 'click', button: 0, target: { closest: () => ({}) },
+    preventDefault() {}, stopImmediatePropagation() {} };
+  assert.equal(h.context.handleGrokPostBack(click), true);
+  h.press({ code: 'Escape', key: 'Escape', target: { typing: true } });
+  assert.deepEqual(destinations, ['/imagine/saved', '/imagine/saved']);
+  const escape = { ...click, type: 'keydown', key: 'Escape' };
+  h.context.overlay = {};
+  assert.equal(h.context.handleGrokPostBack(escape), false);
+  h.context.overlay = null;
+  h.context.isFullscreenApiActive = () => true;
+  assert.equal(h.context.handleGrokPostBack(escape), false);
+  h.context.isFullscreenApiActive = () => false;
+  h.context.document.querySelectorAll = () => [{ getClientRects: () => [{}], closest: () => null }];
+  h.context.getComputedStyle = () => ({ visibility: 'visible', display: 'block' });
+  assert.equal(h.context.handleGrokPostBack(escape), false);
+  assert.equal(h.context.handleGrokPostBack({ ...click, ctrlKey: true }), false);
+  assert.equal(h.context.handleGrokPostBack({ ...click, target: { closest: () => null } }), false);
+  h.context.location.pathname = '/imagine/saved';
+  assert.equal(h.context.handleGrokPostBack(click), false);
+  assert.equal(destinations.length, 2);
+});
+
+test('Escape ignores hidden cookie dialogs and closed popups on post pages', () => {
+  for (const mode of ['no-layout', 'hidden-ancestor', 'visibility-hidden', 'display-none']) {
+    const h = setup();
+    const destinations = [];
+    h.context.location.assign = url => destinations.push(url);
+    h.context.isFullscreenApiActive = () => false;
+    h.context.document.querySelectorAll = () => [{
+      getClientRects: () => mode === 'no-layout' ? [] : [{}],
+      closest: () => mode === 'hidden-ancestor' ? {} : null,
+    }];
+    h.context.getComputedStyle = () => ({
+      visibility: mode === 'visibility-hidden' ? 'hidden' : 'visible',
+      display: mode === 'display-none' ? 'none' : 'block',
+    });
+    const event = h.press({ code: 'Escape', key: 'Escape' });
+    assert.equal(event.stopped, true, mode);
+    assert.deepEqual(destinations, ['/imagine/saved'], mode);
+  }
+});
 
 test('saved R opens loaded post links, skips hidden cards, and ignores repeats and typing', () => {
   const h = setup();
@@ -101,7 +149,7 @@ test('saved cache retains unmounted posts, deduplicates remounts, and captures o
   assert.deepEqual(opened, ['/imagine/post/top?conversation=one', '/imagine/post/bottom?conversation=two']);
 });
 
-test('saved cache survives a new document and rejects unrelated stored URLs', () => {
+test('saved cache restores from local storage in a new session and rejects unrelated stored URLs', () => {
   const data = new Map();
   const storage = { getItem: key => data.get(key) || null, setItem: (key, value) => data.set(key, value) };
   const first = setup(storage);
