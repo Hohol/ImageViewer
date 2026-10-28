@@ -20,6 +20,7 @@ function setup(localStorage) {
   const context = {
     location: { pathname: '/imagine/post/example', origin: 'https://grok.com' }, isGrokHost: () => true,
     URL, localStorage,
+    pickBestVisibleVideo: () => null,
     document: { querySelector: () => stripPresent ? strip : null, querySelectorAll: () => [] },
     overlay: null, ivChatGPTGallery: null,
     viewerHotkeysModalBlocksKeydown: () => false,
@@ -97,7 +98,7 @@ test('Escape ignores hidden cookie dialogs and closed popups on post pages', () 
   }
 });
 
-test('saved R opens loaded post links, skips hidden cards, and ignores repeats and typing', () => {
+test('saved J opens loaded post links, skips hidden cards, and ignores repeats and typing', () => {
   const h = setup();
   h.context.location.pathname = '/imagine/saved';
   const opened = [];
@@ -110,12 +111,12 @@ test('saved R opens loaded post links, skips hidden cards, and ignores repeats a
   invisible.visibility = 'hidden';
   h.context.document.querySelectorAll = () => [hidden, first, invisible];
   h.context.getComputedStyle = el => ({ visibility: el.visibility });
-  h.press({ key: 'r' });
+  h.press({ code: 'KeyJ', key: 'j' });
   assert.deepEqual(opened, [first.href]);
-  for (const guard of [{ repeat: true }, { target: { typing: true } }, { ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }]) h.press(guard);
+  for (const guard of [{ repeat: true }, { target: { typing: true } }, { ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }]) h.press({ code: 'KeyJ', key: 'j', ...guard });
   assert.equal(opened.length, 1);
   h.context.document.querySelectorAll = () => [];
-  h.press();
+  h.press({ code: 'KeyJ', key: 'j' });
   assert.deepEqual(opened, [first.href, first.href]);
   assert.equal(h.imageCalls(), 0);
   assert.equal(h.clicks.length, 0);
@@ -143,9 +144,9 @@ test('saved cache retains unmounted posts, deduplicates remounts, and captures o
   h.context.location.pathname = '/imagine/saved';
   cards = [];
   vm.runInContext('Math.random = () => 0', h.context);
-  h.press();
+  h.press({ code: 'KeyJ', key: 'j' });
   vm.runInContext('Math.random = () => 0.999', h.context);
-  h.press();
+  h.press({ code: 'KeyJ', key: 'j' });
   assert.deepEqual(opened, ['/imagine/post/top?conversation=one', '/imagine/post/bottom?conversation=two']);
 });
 
@@ -162,13 +163,67 @@ test('saved cache restores from local storage in a new session and rejects unrel
   restored.context.location.pathname = '/imagine/saved';
   const opened = [];
   restored.context.location.assign = url => opened.push(url);
-  restored.press();
+  restored.press({ code: 'KeyJ', key: 'j' });
   assert.deepEqual(opened, [href]);
   storage.setItem('ivGrokSavedPostUrls', JSON.stringify([href, 'https://example.com/imagine/post/no', 'javascript:alert(1)', 'https://grok.com/settings']));
   const filtered = setup(storage);
   assert.equal(vm.runInContext('grokSavedPostUrls.size', filtered.context), 1);
   storage.setItem('ivGrokSavedPostUrls', 'invalid json');
   assert.equal(vm.runInContext('grokSavedPostUrls.size', setup(storage).context), 0);
+});
+
+test('post J skips the current post regardless of conversation query and safely handles no alternatives', () => {
+  const h = setup();
+  h.context.location.pathname = '/imagine/post/current/';
+  const opened = [];
+  h.context.location.assign = url => opened.push(url);
+  vm.runInContext(`grokSavedPostUrls.add('https://grok.com/imagine/post/current?conversation=old');
+    grokSavedPostUrls.add('https://grok.com/imagine/post/other?conversation=keep');`, h.context);
+  for (const guard of [{ repeat: true }, { target: { typing: true } }, { ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+    h.press({ code: 'KeyJ', key: 'j', ...guard });
+  }
+  assert.equal(opened.length, 0);
+  h.press({ code: 'KeyJ', key: 'j' });
+  assert.deepEqual(opened, ['https://grok.com/imagine/post/other?conversation=keep']);
+  vm.runInContext("grokSavedPostUrls.delete('https://grok.com/imagine/post/other?conversation=keep')", h.context);
+  h.press({ code: 'KeyJ', key: 'j' });
+  assert.equal(opened.length, 1);
+  h.context.location.pathname = '/chat/example';
+  assert.equal(h.press({ code: 'KeyJ', key: 'j' }).prevented, undefined);
+});
+
+test('random post sound handoff restores muted and unmuted state after a full navigation', () => {
+  for (const muted of [true, false]) {
+    const data = new Map();
+    const storage = { getItem: key => data.get(key) || null,
+      setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+    const source = setup();
+    source.context.sessionStorage = storage;
+    source.context.pickBestVisibleVideo = () => ({ muted });
+    source.context.rememberGrokJumpSound('https://grok.com/imagine/post/destination');
+    const destination = setup();
+    destination.context.sessionStorage = storage;
+    destination.context.location.pathname = '/imagine/post/destination';
+    const video = { muted: !muted };
+    const events = {};
+    destination.context.document.addEventListener = (name, fn) => { events[name] = fn; };
+    destination.context.pickBestVisibleVideo = () => video;
+    let clicks = 0;
+    destination.context.getComputedStyle = () => ({ visibility: 'visible' });
+    destination.context.document.querySelectorAll = () => [{ textContent: muted ? 'Mute' : 'Unmute',
+      getClientRects: () => [{}], click: () => { clicks++; } }];
+    destination.context.bindGrokJumpSound();
+    assert.equal(video.muted, muted);
+    assert.equal(clicks, 1);
+    video.muted = !muted; // A late player initialization must also be corrected.
+    events.playing();
+    assert.equal(video.muted, muted);
+    events.pointerdown({ isTrusted: true });
+    video.muted = !muted;
+    events.playing();
+    assert.equal(video.muted, !muted, 'explicit user interaction releases the handoff');
+    assert.equal(data.size, 0);
+  }
 });
 
 test('Imagine R selects a different video in page, video fullscreen, and image overlay modes', () => {

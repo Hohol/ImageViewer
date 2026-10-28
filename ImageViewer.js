@@ -3571,9 +3571,9 @@
             ],
         },
         {
-            title: 'Imagine saved',
+            title: 'Imagine posts',
             items: [
-                ['R', 'Open random post seen in this session'],
+                ['J', 'Open random cached post (Saved or post page)'],
             ],
         },
         {
@@ -3869,11 +3869,65 @@
         return mounted;
     }
 
+    const GROK_JUMP_SOUND_KEY = 'ivGrokJumpSound';
+    let grokJumpSound = null;
+
+    function rememberGrokJumpSound(url) {
+        const video = pickBestVisibleVideo();
+        if (!video) return;
+        grokJumpSound = { path: new URL(url, location.origin).pathname,
+            muted: video.muted, expires: Date.now() + 10000 };
+        try { sessionStorage.setItem(GROK_JUMP_SOUND_KEY, JSON.stringify(grokJumpSound)); } catch (_) {}
+    }
+
+    function restoreGrokJumpSound() {
+        if (!grokJumpSound || grokJumpSound.expires < Date.now() || location.pathname !== grokJumpSound.path) return;
+        const video = pickBestVisibleVideo();
+        if (!video) return;
+        const muted = grokJumpSound.muted;
+        // Update Grok's own state too, so its next render does not mute us again.
+        const label = muted ? 'Mute' : 'Unmute';
+        const control = Array.from(document.querySelectorAll('button')).find((button) =>
+            button.textContent.trim() === label && button.getClientRects().length &&
+            getComputedStyle(button).visibility !== 'hidden');
+        if (control) control.click();
+        if (video.muted !== muted) video.muted = muted;
+    }
+
+    function bindGrokJumpSound() {
+        if (!isGrokHost()) return;
+        try {
+            const saved = JSON.parse(sessionStorage.getItem(GROK_JUMP_SOUND_KEY) || 'null');
+            sessionStorage.removeItem(GROK_JUMP_SOUND_KEY);
+            if (saved && typeof saved.muted === 'boolean' && saved.path === location.pathname && saved.expires > Date.now()) {
+                grokJumpSound = saved;
+            }
+        } catch (_) {}
+        // Once the user interacts, their new mute choice takes precedence.
+        const release = (event) => {
+            if (event.isTrusted) {
+                grokJumpSound = null;
+                try { sessionStorage.removeItem(GROK_JUMP_SOUND_KEY); } catch (_) {}
+            }
+        };
+        document.addEventListener('pointerdown', release, true);
+        document.addEventListener('keydown', (event) => {
+            if (event.code !== 'KeyJ') release(event);
+        }, true);
+        for (const name of ['loadedmetadata', 'canplay', 'playing']) {
+            document.addEventListener(name, restoreGrokJumpSound, true);
+        }
+        restoreGrokJumpSound();
+    }
+
     function openRandomGrokSavedPost() {
         const mounted = captureGrokSavedPosts();
-        const urls = Array.from(grokSavedPostUrls);
+        const currentPath = location.pathname.replace(/\/$/, '');
+        const urls = Array.from(grokSavedPostUrls).filter((href) =>
+            new URL(href, location.origin).pathname.replace(/\/$/, '') !== currentPath);
         if (!urls.length) return;
         const url = urls[pickRandomIndex(urls.length, -1)];
+        rememberGrokJumpSound(url);
         const link = mounted.get(url);
         if (link) link.click();
         else location.assign(url);
@@ -4085,6 +4139,7 @@
             syncGrokImagineSavedKeepUi();
             captureGrokSavedPosts();
             syncGrokPostBackLink();
+            restoreGrokJumpSound();
         });
     }
 
@@ -5597,7 +5652,8 @@
     // Apply shared volume to a single video
     function applySharedVolume(video) {
         video.volume = sharedVolume;
-        video.muted = false;
+        video.muted = grokJumpSound && grokJumpSound.path === location.pathname &&
+            grokJumpSound.expires > Date.now() ? grokJumpSound.muted : false;
     }
     
     // Apply shared volume to all videos on the page
@@ -5946,6 +6002,7 @@
 
     bindImagineVisitedPageLifecycle();
     bindGrokSavedComposerFocus();
+    bindGrokJumpSound();
     window.addEventListener('click', handleGrokPostBack, true);
     window.addEventListener('popstate', () => {
         scheduleImaginePostDeleteButtonsSync();
@@ -6558,16 +6615,20 @@
             return;
         }
 
-        // R: saved posts, Imagine videos, or random images on other pages.
+        // J: random cached post, on both the Saved grid and individual posts.
+        if (e.code === 'KeyJ' && isGrokHost() &&
+            (isGrokImagineSavedPage() || location.pathname.startsWith('/imagine/post/'))) {
+            if (e.metaKey || e.ctrlKey || e.altKey || isKeyboardTypingTarget(e.target)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (!e.repeat) openRandomGrokSavedPost();
+            return;
+        }
+
+        // R: Imagine videos, or random images on other pages.
         if (e.code === 'KeyR') {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             if (isKeyboardTypingTarget(e.target)) return;
-            if (isGrokImagineSavedPage()) {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                if (!e.repeat) openRandomGrokSavedPost();
-                return;
-            }
             if (isGrokImaginePage()) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
