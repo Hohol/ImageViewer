@@ -84,7 +84,7 @@ test('Escape ignores hidden cookie dialogs and closed popups on post pages', () 
     const destinations = [];
     h.context.location.assign = url => destinations.push(url);
     h.context.isFullscreenApiActive = () => false;
-    h.context.document.querySelectorAll = () => [{
+    h.context.document.querySelectorAll = selector => selector === 'a[href]' ? [] : [{
       getClientRects: () => mode === 'no-layout' ? [] : [{}],
       closest: () => mode === 'hidden-ancestor' ? {} : null,
     }];
@@ -95,6 +95,33 @@ test('Escape ignores hidden cookie dialogs and closed popups on post pages', () 
     const event = h.press({ code: 'Escape', key: 'Escape' });
     assert.equal(event.stopped, true, mode);
     assert.deepEqual(destinations, ['/imagine/saved'], mode);
+  }
+});
+
+test('Back reuses native Saved links but never follows a rewritten Imagine link', () => {
+  for (const route of ['back-saved', 'back-imagine', 'separate-saved']) {
+    const h = setup();
+    const assigned = [];
+    const clicked = [];
+    h.context.location.assign = url => assigned.push(url);
+    const link = (href, label) => ({
+      href,
+      getAttribute(name) { return name === 'href' ? this.href : label; },
+      setAttribute(name, value) { if (name === 'href') this.href = value; },
+      click() {
+        const event = { type: 'click', button: 0, target: { closest: () => this } };
+        assert.equal(h.context.handleGrokPostBack(event), false, 'native click bypasses our interception');
+        clicked.push(label);
+      },
+    });
+    const back = link(route === 'back-saved' ? '/imagine/saved' : '/imagine', 'Back');
+    const links = route === 'separate-saved' ? [back, link('/imagine/saved', 'Saved')] : [back];
+    h.context.document.querySelectorAll = selector => selector === 'a[href]' ? links : [back];
+    h.context.syncGrokPostBackLink();
+    assert.equal(back.href, '/imagine/saved');
+    h.context.navigateGrokBackToSaved();
+    assert.deepEqual(assigned, route === 'back-imagine' ? ['/imagine/saved'] : []);
+    assert.deepEqual(clicked, route === 'back-imagine' ? [] : [route === 'back-saved' ? 'Back' : 'Saved']);
   }
 });
 

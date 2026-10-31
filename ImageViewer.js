@@ -1121,6 +1121,8 @@
             unreadGeneration = true;
             unreadImageTurn = key(turn);
             updateGenerationTitle();
+            const focused = document.activeElement;
+            if (focused?.matches('textarea, input, [contenteditable="true"]')) focused.blur();
             playGenerationChime();
         }
         const soundObserver = new MutationObserver(checkGenerationSound);
@@ -3813,14 +3815,49 @@
         );
     }
 
+    const grokPostBackOriginalHrefs = new WeakMap();
+    let grokPostBackNativeClick = false;
+
+    function rememberGrokPostBackHref(link) {
+        const href = link.getAttribute('href');
+        // Keep the destination supplied to Grok's link component, before our DOM override.
+        if (!grokPostBackOriginalHrefs.has(link) || href !== '/imagine/saved') {
+            grokPostBackOriginalHrefs.set(link, href);
+        }
+        return grokPostBackOriginalHrefs.get(link);
+    }
+
+    function navigateGrokBackToSaved() {
+        const links = Array.from(document.querySelectorAll('a[href]'));
+        const nativeLink = links.find((link) => {
+            const href = link.getAttribute('aria-label') === 'Back'
+                ? rememberGrokPostBackHref(link) : link.getAttribute('href');
+            if (!href) return false;
+            try {
+                const url = new URL(href, location.origin);
+                return url.origin === location.origin && /^\/imagine\/saved\/?$/.test(url.pathname);
+            } catch (_) { return false; }
+        });
+        if (nativeLink) {
+            // Clicking the real link lets Grok's router retain the Saved page state.
+            grokPostBackNativeClick = true;
+            try { nativeLink.click(); }
+            finally { grokPostBackNativeClick = false; }
+        } else {
+            location.assign('/imagine/saved');
+        }
+    }
+
     function syncGrokPostBackLink() {
         if (!isGrokHost() || !location.pathname.startsWith('/imagine/post/')) return;
         document.querySelectorAll('a[aria-label="Back"][href^="/imagine"]').forEach((link) => {
+            rememberGrokPostBackHref(link);
             if (link.getAttribute('href') !== '/imagine/saved') link.setAttribute('href', '/imagine/saved');
         });
     }
 
     function handleGrokPostBack(e) {
+        if (grokPostBackNativeClick) return false;
         if (!isGrokHost() || !location.pathname.startsWith('/imagine/post/')) return false;
         if (e.type === 'click') {
             if (!e.target.closest?.('a[aria-label="Back"][href^="/imagine"]')) return false;
@@ -3840,7 +3877,7 @@
         }
         e.preventDefault();
         e.stopImmediatePropagation();
-        if (!e.repeat) location.assign('/imagine/saved');
+        if (!e.repeat) navigateGrokBackToSaved();
         return true;
     }
 
