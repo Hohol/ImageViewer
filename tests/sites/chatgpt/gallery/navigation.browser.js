@@ -1,12 +1,20 @@
 (async () => {
   imageEvery = 4;
-  const gallery = await createGallery();
+  let controlsActive = false;
+  const gallery = await createGallery(() => controlsActive);
   const key = img => JSON.parse(gallery.key(img))[0];
   const search = (img, direction) => gallery.findNext(img, direction, () => true);
   setup({ count: 17, lazy: 1800 });
   await sleep(220);
   let selected = gallery.images().at(-1);
   check(key(selected) === 'turn-16', 'starts with only the newest image cached');
+  controlsActive = true;
+  const scrollBefore = root.scrollTop;
+  check(gallery.images().length > 0, 'active drawing controls still allow cached images');
+  check(await search(selected, -1) === null, 'active controls block uncached navigation');
+  await gallery.scan();
+  check(root.scrollTop === scrollBefore, 'active controls prevent gallery scrolling and scans');
+  controlsActive = false;
   for (const expected of [12, 8, 4, 0]) {
     const found = await search(selected, -1);
     check(found && key(found.list[found.index]) === 'turn-' + expected, 'backward search crosses text to turn ' + expected);

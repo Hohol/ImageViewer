@@ -3,7 +3,7 @@ const path = require('node:path');
 
 const scriptPath = path.resolve(__dirname, '../../ImageViewer.js');
 const sections = {
-  'chatgpt/retries': ['    const CHATGPT_RETRY_ATTEMPTS =', '    function createChatGPTGallery()'],
+  'chatgpt/retries': ['    const CHATGPT_RETRY_ATTEMPTS =', '    function createChatGPTGallery('],
   'shared/viewer/hotkey-image': ['    function pickBestVisibleEligibleImage()', '    // Find the target video for keyboard controls'],
   'shared/viewer/local-hotkeys': ['        let help = null;', "        window.addEventListener('hashchange'"],
   'shared/viewer/local-images': ['    function localImageName(', '    function initLocalImageViewer()'],
@@ -25,7 +25,7 @@ const sections = {
   ],
   'shared/viewer/image-target': ['    function imageFromEventTarget(', '    function viewerImageFromEventTarget('],
   'shared/viewer/image-collection': ['    function collectNavigableImages()', '    function pickRandomIndex('],
-  'chatgpt/gallery': ['    function createChatGPTGallery()', '    // ChatGPT scrolls'],
+  'chatgpt/gallery': ['    function createChatGPTGallery(', '    // ChatGPT scrolls'],
   'chatgpt/navigation-debug': ['    function createChatGPTNavigationDebug()', '    // The timeline only mounts'],
   'shared/viewer/navigation': ['    function cancelImageNavigationSearch()', '    function navigateToRandomImage()'],
 };

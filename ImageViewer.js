@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.44
+// @version      2.45
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -291,6 +291,7 @@
     let overlayImage = null;
     let ivChatGPTNavigationDebug = null;
     let ivChatGPTGallery = null;
+    let ivChatGPTControls = null;
     let imageNavigationSearch = null;
     if (isChatGPTHost()) {
         const style = document.createElement('style');
@@ -1144,13 +1145,41 @@
             if (run !== session) throw new Error('cancelled');
             if (identity() !== session.conversation) throw new Error('Chat changed');
         }
+        const sessionTime = session => Date.now() - (session.pausedMs || 0);
+        function targetMounted(session) {
+            const current = latest();
+            if (!current || (!current.querySelector('[data-user-message-bubble]') && !current.querySelector(editorSelector))) return false;
+            if (key(current) === session.turnKey) return true;
+            if (!session.turnKey) return latestPosition(timeline(), current).atLatest;
+            // Edit/send can replace the turn ID. Only adopt its replacement at
+            // the conversation tail, never a matching prompt in older history.
+            return session.allowTurnReplacement && prompt(current).trim() === session.prompt?.trim() &&
+                latestPosition(timeline(), current).atLatest;
+        }
         async function waitFor(session, predicate, timeout, message) {
-            const end = Date.now() + timeout;
+            const end = sessionTime(session) + timeout;
+            let pausedAt = null;
+            let previousStatus = '';
             while (true) {
                 check(session);
+                if (!targetMounted(session)) {
+                    if (pausedAt === null) {
+                        pausedAt = Date.now();
+                        previousStatus = status.textContent;
+                        const prefix = previousStatus.match(/^Attempt \d+\/\d+ · /)?.[0] || '';
+                        status.textContent = prefix + 'Paused · Scroll back to latest';
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                    continue;
+                }
+                if (pausedAt !== null) {
+                    session.pausedMs = (session.pausedMs || 0) + Date.now() - pausedAt;
+                    pausedAt = null;
+                    status.textContent = previousStatus;
+                }
                 const result = predicate();
                 if (result) return result;
-                if (Date.now() >= end) throw new Error(message);
+                if (sessionTime(session) >= end) throw new Error(message);
                 await new Promise((resolve) => setTimeout(resolve, 250));
             }
         }
@@ -1163,6 +1192,9 @@
         async function retry(session) {
             try {
                 if (session.manualPrompt) {
+                    session.turnKey = session.previousTurn;
+                    session.prompt = 'd';
+                    session.allowTurnReplacement = true;
                     status.textContent = `Attempt 0/${session.limit} · Generating`;
                     await waitFor(session, () => {
                         const current = latest();
@@ -1183,6 +1215,7 @@
                 if (!session.manualPrompt && !editButton(turn) && !busy(turn)) throw new Error('Edit message control is unavailable');
                 session.turnKey = key(turn);
                 session.prompt = prompt(turn);
+                session.allowTurnReplacement = false;
                 // An existing generation is allowed to finish before spending a retry.
                 const waitingForInitial = busy(turn) || session.manualPrompt;
                 if (waitingForInitial) {
@@ -1195,8 +1228,8 @@
                         const generated = images(current);
                         if (generated.some((img) => img.complete && img.naturalWidth > 0)) return true;
                         if (generated.length || !enabled(editButton(current))) return false;
-                        if (!completedAt) completedAt = Date.now();
-                        return Date.now() - completedAt >= 2000;
+                        if (!completedAt) completedAt = sessionTime(session);
+                        return sessionTime(session) - completedAt >= 2000;
                     }, 15 * 60 * 1000, 'Generation timed out; retries stopped');
                     turn = latest();
                     if (images(turn).some((img) => img.complete && img.naturalWidth > 0)) {
@@ -1205,19 +1238,20 @@
                     }
                 }
                 for (let attempt = 1; attempt <= session.limit; attempt++) {
-                    check(session);
+                    await waitFor(session, () => true, 5000, 'Message unavailable');
                     turn = latest();
                     if (key(turn) !== session.turnKey || prompt(turn) !== session.prompt) throw new Error('Message changed');
                     if (busy(turn)) throw new Error('Another generation started');
                     if (attempt > 1 || waitingForInitial) {
-                        const until = Date.now() + 3000;
+                        const until = sessionTime(session) + 3000;
                         await waitFor(session, () => {
-                            const remaining = Math.ceil((until - Date.now()) / 1000);
+                            const remaining = Math.ceil((until - sessionTime(session)) / 1000);
                             if (remaining <= 0) return true;
                             status.textContent = `Attempt ${attempt}/${session.limit} · Retry in ${remaining}s`;
                             return false;
                         }, 4000, 'Retry delay interrupted');
                     }
+                    await waitFor(session, () => true, 5000, 'Message unavailable');
                     turn = latest();
                     if (key(turn) !== session.turnKey || prompt(turn) !== session.prompt || busy(turn)) {
                         throw new Error('Message changed');
@@ -1226,17 +1260,17 @@
                     const oldIds = responseIds(turn);
                     const oldImages = new Set(images(turn).map((img) => img.currentSrc || img.src));
                     click(session, editButton(turn), 'Edit message');
-                    const editor = await waitFor(session, () => latest()?.querySelector(editorSelector),
+                    await waitFor(session, () => latest()?.querySelector(editorSelector),
                         5000, 'Could not open message editor');
-                    const editTurn = editor.closest(turnSelector);
                     const send = await waitFor(session, () => {
-                        const item = namedButton(editTurn, 'send');
+                        const item = namedButton(latest(), 'send');
                         return enabled(item) && item;
                     }, 5000, 'Send is unavailable');
                     // Do not rewrite the editor: this preserves the prompt and attachments.
+                    session.allowTurnReplacement = true;
                     click(session, send, 'Send');
                     status.textContent = `Attempt ${attempt}/${session.limit} · Generating`;
-                    const sentAt = Date.now();
+                    const sentAt = sessionTime(session);
                     let started = false;
                     let completedAt = 0;
                     await waitFor(session, () => {
@@ -1250,17 +1284,18 @@
                         if (busy(current) || (responseIds(current) && responseIds(current) !== oldIds)) {
                             started = true;
                             session.turnKey = key(current);
+                            session.allowTurnReplacement = false;
                         }
-                        if (!started && Date.now() - sentAt > 15000) throw new Error('Generation did not start');
+                        if (!started && sessionTime(session) - sentAt > 15000) throw new Error('Generation did not start');
                         if (!started) return false;
                         if (state(current) !== 'complete' || busy(current)) { completedAt = 0; return false; }
-                        if (!completedAt) completedAt = Date.now();
+                        if (!completedAt) completedAt = sessionTime(session);
                         const generated = images(current).filter((img) => !oldImages.has(img.currentSrc || img.src));
                         if (generated.some((img) => img.complete && img.naturalWidth > 0)) return true;
                         // A completed image may still be decoding/downloading. Never
                         // submit another generation just because its image loads slowly.
                         if (generated.length) return false;
-                        return Date.now() - completedAt >= 2000;
+                        return sessionTime(session) - completedAt >= 2000;
                     }, 15 * 60 * 1000, 'Generation timed out; retries stopped');
                     turn = latest();
                     if (images(turn).some((img) => !oldImages.has(img.currentSrc || img.src) && img.complete && img.naturalWidth > 0)) {
@@ -1284,7 +1319,7 @@
         autosendButton.addEventListener('click', () => {
             if (run?.autosend) { finish('Autosend cancelled'); return; }
             finish('');
-            const session = { conversation: identity(), limit: attemptLimit, autosend: true };
+            const session = { conversation: identity(), limit: attemptLimit, autosend: true, turnKey: key(latest()) };
             run = session;
             autosendButton.textContent = 'Cancel queued draw';
             setRetryButtonActive(autosendButton, true);
@@ -1297,8 +1332,8 @@
                     const turn = latest();
                     if (!turn || state(turn) !== 'complete' || busy(turn)) { completedAt = 0; return false; }
                     if (turn.querySelector(editorSelector)) throw new Error('Finish editing the message first');
-                    if (!completedAt) completedAt = Date.now();
-                    return Date.now() - completedAt >= 2000;
+                    if (!completedAt) completedAt = sessionTime(session);
+                    return sessionTime(session) - completedAt >= 2000;
                 }, 15 * 60 * 1000, 'Response timed out; autosend stopped');
                 const input = composer()?.querySelector('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="Ask ChatGPT"], textarea');
                 if (!input) throw new Error('Prompt field is unavailable');
@@ -1380,12 +1415,15 @@
         }, true);
         document.addEventListener('click', (event) => {
             if (automaticClick || !event.isTrusted || panel.contains(event.target)) return;
+            if (typeof overlay !== 'undefined' && overlay?.contains(event.target)) return;
+            if (event.button === 0 && imageFromEventTarget(event.target)) return;
             const item = event.target.closest?.('button');
             if (item && isPromptSend(item)) { manualSubmission(item); return; }
             if (run && item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
                 item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
         }, true);
         document.addEventListener('input', (event) => {
+            if (typeof overlay !== 'undefined' && overlay?.contains(event.target)) return;
             if (run && !automaticClick && event.isTrusted && !panel.contains(event.target)) finish('Stopped after manual input');
         }, true);
         document.addEventListener('keydown', (event) => {
@@ -1440,7 +1478,7 @@
         layoutObserver.observe(panel);
         const timer = setInterval(refresh, 1000);
         refresh();
-        return { stop: () => finish('Retries stopped'), destroy: () => {
+        return { get active() { return !!run; }, stop: () => finish('Retries stopped'), destroy: () => {
             destroyed = true;
             soundObserver.disconnect();
             titleObserver.disconnect();
@@ -1458,7 +1496,7 @@
 
     }
 
-    function createChatGPTGallery() {
+    function createChatGPTGallery(cacheOnly = () => false) {
         if (!isChatGPTHost()) return null;
         const timelineSelector = '[data-app-action-timeline-scroll]';
         const turnSelector = '[data-turn-key], [data-testid^="conversation-turn-"]';
@@ -1808,8 +1846,8 @@
         }
 
         function images() {
-            if (!syncConversation() || !records.size) return null;
-            const current = mounted();
+            if (!syncConversation() || !records.size) return cacheOnly() ? [] : null;
+            const current = cacheOnly() ? [] : mounted();
             const available = new Map(current.map((item) => [item.key, item]));
             // Eligibility was checked on the source image before capture. Cached
             // copies no longer have the site's ancestor markup to inspect.
@@ -1845,6 +1883,7 @@
         }
 
         function setFromBottom(el, distance) {
+            if (cacheOnly()) return;
             el.scrollTop = getComputedStyle(el).flexDirection === 'column-reverse'
                 ? -distance : el.scrollHeight - el.clientHeight - distance;
         }
@@ -1865,7 +1904,7 @@
         }
 
         function active(session) {
-            const valid = !session.cancelled && session.epoch === generation &&
+            const valid = !cacheOnly() && !session.cancelled && session.epoch === generation &&
                 session.id === conversationId() && session.root === timeline() && session.root.isConnected;
             if (!valid && !session.inactiveLogged) {
                 session.inactiveLogged = true;
@@ -1975,8 +2014,9 @@
         }
 
         async function scan() {
+            if (cacheOnly()) { showViewerToast('Gallery uses cached images while drawing controls are active'); return; }
             if (run?.navigation) { cancel('full-scan-started'); await run.done; }
-            if (run) return;
+            if (run || cacheOnly()) return;
             const id = syncConversation();
             const root = timeline();
             if (!id || !root) { showViewerToast('Open a ChatGPT conversation first'); return; }
@@ -2178,7 +2218,7 @@
         }
 
         async function findNext(selected, direction, isCurrent) {
-            if ((run && !run.navigation) || !isCurrent()) return null;
+            if (cacheOnly() || (run && !run.navigation) || !isCurrent()) return null;
             const id = syncConversation();
             const root = timeline();
             const key = imageKeys.get(selected);
@@ -2194,7 +2234,7 @@
             // search is winding down. Confirmed ends have already returned above.
             showViewerToast(loadingMessage, 30000);
             if (run?.navigation) { cancel('navigation-replaced'); await run.done; }
-            if (!isCurrent()) return null;
+            if (!isCurrent() || cacheOnly()) return null;
             if (run || id !== conversationId() || root !== timeline()) {
                 hideViewerToast(loadingMessage);
                 return null;
@@ -2346,6 +2386,7 @@
         captureMounted();
         return {
             scan, cancel, images, findNext, nearestImage,
+            get cacheOnly() { return cacheOnly(); },
             cancelNavigation() { if (run?.navigation) cancel('navigation-cancelled'); },
             get scanning() { return !!run && !run.navigation; },
             key: (img) => imageKeys.get(img),
@@ -2815,6 +2856,7 @@
     }
 
     function scrollToImage() {
+        if (ivChatGPTGallery?.cacheOnly) { showViewerToast('Chat scrolling is paused while drawing controls are active'); return; }
         const selected = imgs[currentIndex];
         const imgEl = selected?.isConnected ? selected : ivChatGPTGallery?.original(selected);
         if (!imgEl) {
@@ -2823,7 +2865,9 @@
         }
         ivChatGPTNavigationDebug?.record('scroll-to-image');
         hideGallery();
-        setTimeout(() => imgEl?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+        setTimeout(() => {
+            if (!ivChatGPTGallery?.cacheOnly) imgEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
     }
 
     // Convert Google image URL to full-size version
@@ -3181,6 +3225,7 @@
         galleryInPage = false;
         
         imgs = collectNavigableImages();
+        if (ivChatGPTGallery?.cacheOnly && !imgs.length) { showViewerToast('No cached images available yet'); return; }
         
         // Cached ChatGPT images have their own URLs; match their stable message/slot key.
         const key = ivChatGPTGallery?.key(img);
@@ -3288,7 +3333,13 @@
     document.addEventListener('click', e => {
         if (!overlay && e.button === 0) {
             const img = imageFromEventTarget(e.target);
-            if (img) showGallery(img);
+            if (img) {
+                if (ivChatGPTGallery?.cacheOnly) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }
+                showGallery(img);
+            }
         }
     }, true);
 
@@ -6891,8 +6942,8 @@
         if (!e.cancelBubble && !e.isComposing && e.keyCode !== 229) handleOverlayKeydown(e);
     };
     ivChatGPTNavigationDebug = createChatGPTNavigationDebug();
-    ivChatGPTGallery = createChatGPTGallery();
-    createChatGPTControls();
+    ivChatGPTGallery = createChatGPTGallery(() => !!ivChatGPTControls?.active);
+    ivChatGPTControls = createChatGPTControls();
     } // End of init()
     
     // Run init when DOM is ready

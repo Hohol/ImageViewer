@@ -26,6 +26,7 @@ function mount(state = 'complete', image = false) {
     </div></div>`;
   root.querySelector('button').onclick = () => {
     const turn = root.firstElementChild;
+    turn.querySelector('[data-user-message-bubble]').remove();
     const editor = document.createElement('div');
     editor.contentEditable = 'true';
     editor.setAttribute('aria-label', 'Edit message');
@@ -303,6 +304,52 @@ const status = () => document.querySelector('#iv-chatgpt-retries [role="status"]
   document.querySelector('[data-map-composer-conversation]').setAttribute('data-map-composer-conversation', 'autosend-other-chat');
   await until(() => status() === 'Chat changed');
   check(newSends === 2, 'chat navigation cancels pending autosend');
+  setup();
+  mount('in_progress');
+  start();
+  const detachTarget = () => {
+    root.innerHTML = '<div data-turn-key="older"><div data-talvt-turn-state="complete"><div data-user-message-bubble>Older message</div></div></div>';
+  };
+  detachTarget();
+  await until(() => status().includes('Paused'));
+  await delay(700);
+  check(sends === 0 && controller.active, 'unloaded initial generation pauses without cancelling or spending retries');
+  mount('complete', true);
+  await until(() => status() === 'Image generated (0 retries)');
+
+  setup();
+  onSend = () => {};
+  start();
+  await until(() => sends === 1);
+  await delay(350);
+  detachTarget();
+  await until(() => status().includes('Paused'));
+  check(sends === 1 && controller.active, 'in-flight retry pauses on older mounted history');
+  mount('complete', true);
+  await until(() => status() === 'Image generated (1 retries)');
+
+  setup();
+  composerInput.textContent = '';
+  mount('in_progress');
+  autosend();
+  const sendsBeforePause = newSends;
+  detachTarget();
+  await until(() => status().includes('Paused'));
+  await delay(2300);
+  check(newSends === sendsBeforePause && controller.active, 'queued drawing does not send over an older completed response');
+  mount('complete');
+  await until(() => newSends === sendsBeforePause + 1);
+  await until(() => status() === 'Image generated (0 retries)');
+
+  setup();
+  mount('in_progress');
+  start();
+  detachTarget();
+  await until(() => status().includes('Paused'));
+  controller.stop();
+  mount('complete');
+  await delay(400);
+  check(!controller.active && sends === 0, 'Stop cancels a paused session');
   nativeSend.remove();
   controller.destroy();
 })().then(() => finish()).catch(error => { controller?.destroy(); finish(error); });

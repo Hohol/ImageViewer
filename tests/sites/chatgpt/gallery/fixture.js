@@ -36,11 +36,12 @@ async function clipboardPngBlobFromImageElement(img) {
   canvas.getContext('2d').drawImage(img, 0, 0);
   return new Promise(resolve => canvas.toBlob(resolve));
 }
-async function createGallery() {
+async function createGallery(cacheOnly = () => false) {
   const response = await nativeFetch('/subject/chatgpt/gallery.js');
   if (!response.ok) throw new Error(await response.text());
   const code = await response.text();
-  return new Function('setTimeout', 'setInterval', 'performance', code + '\nreturn createChatGPTGallery();')(
+  return new Function('cacheOnly', 'setTimeout', 'setInterval', 'performance', code + '\nreturn createChatGPTGallery(cacheOnly);')(
+    cacheOnly,
     (fn, ms) => nativeTimeout(fn, ms / scale),
     (fn, ms) => {
       const id = window.setInterval(fn, ms / scale);

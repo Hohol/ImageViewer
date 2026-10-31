@@ -23,7 +23,7 @@ test('two generated images keep distinct identities when messages are grouped an
       return this.owner;
     }, getBoundingClientRect: () => ({ top: 0, height: 100 }) };
   };
-  const context = { timeline: () => root, turnSelector: '[data-turn-key]', turnKey: () => 'turn',
+  const context = { cacheOnly: () => false, timeline: () => root, turnSelector: '[data-turn-key]', turnKey: () => 'turn',
     discardedTurns: new WeakMap(), discardedImages: new WeakMap(), imageKeys: new WeakMap(),
     records: new Map(), turnPositions: new Map(), turnOrder: ['turn'], fromBottom: () => 0,
     mergeTurns() {}, rememberMountedEnds() {}, isExcludedImage: () => false, syncConversation: () => true };
