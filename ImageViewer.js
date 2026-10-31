@@ -6892,6 +6892,7 @@
                 loopIn = video.currentTime;
                 if (loopOut !== null && loopIn >= loopOut) loopOut = null;
                 startLooping(video);
+                showViewerToast('Loop in');
             }
             return;
         }
@@ -6908,6 +6909,7 @@
                 startLooping(video);
                 const start = loopIn !== null ? loopIn : 0;
                 video.currentTime = start;
+                showViewerToast('Loop out');
             }
             return;
         }
