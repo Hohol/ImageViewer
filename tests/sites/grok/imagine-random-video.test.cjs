@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { readSection } = require('../../support/source.cjs');
 
-function setup(localStorage) {
+function setup(localStorage, sessionStorage) {
   let selected, stripPresent = true, imageCalls = 0;
   const clicks = [];
   const toasts = [];
@@ -19,7 +19,7 @@ function setup(localStorage) {
   const strip = { querySelectorAll: () => buttons, querySelector: () => buttons.includes(selected) ? selected : null };
   const context = {
     location: { pathname: '/imagine/post/example', origin: 'https://grok.com' }, isGrokHost: () => true,
-    URL, localStorage,
+    URL, localStorage, sessionStorage,
     pickBestVisibleVideo: () => null,
     document: { querySelector: () => stripPresent ? strip : null, querySelectorAll: () => [] },
     overlay: null, ivChatGPTGallery: null,
@@ -324,6 +324,38 @@ test('deletion tracking preserves selection for unselected deletions and unrelat
   h.buttons.splice(1, 1);
   h.context.syncImagineSelectionAfterDeletion();
   assert.equal(h.clicks.length, 0);
+});
+
+test('empty J-opened posts jump again, evict deleted URLs, and fall back to Saved when exhausted', () => {
+  const data = new Map([['ivGrokJumpEntry', '/imagine/post/example']]);
+  const storage = { getItem: key => data.get(key) || null,
+    setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+  const h = setup(storage, storage);
+  const destinations = [];
+  h.context.location.assign = url => destinations.push(url);
+  h.context.history.back = () => assert.fail('J entry must not navigate back');
+  vm.runInContext(`grokSavedPostUrls.add('https://grok.com/imagine/post/example?conversation=old');
+    grokSavedPostUrls.add('https://grok.com/imagine/post/next?conversation=keep');`, h.context);
+  h.context.leaveEmptyImaginePost(['example']);
+  assert.deepEqual(destinations, ['https://grok.com/imagine/post/next?conversation=keep']);
+  assert.equal(data.get('ivGrokJumpEntry'), '/imagine/post/next');
+  assert.equal(data.get('ivGrokSavedPostUrls').includes('example'), false);
+  h.context.location.pathname = '/imagine/post/next';
+  h.context.leaveEmptyImaginePost(['next']);
+  assert.equal(destinations.at(-1), '/imagine/saved');
+});
+
+test('ordinary entries retain back navigation and leaving a J post clears its origin', () => {
+  const h = setup();
+  let back = 0;
+  h.context.history.back = () => { back++; };
+  h.context.leaveEmptyImaginePost();
+  assert.equal(back, 1);
+  vm.runInContext("grokJumpEntryPath = grokJumpCurrentPath = location.pathname", h.context);
+  h.context.history.pushState({}, '', '/imagine/saved');
+  h.context.history.pushState({}, '', '/imagine/post/example');
+  h.context.leaveEmptyImaginePost();
+  assert.equal(back, 2);
 });
 
 test('Imagine R selects a different video in page, video fullscreen, and image overlay modes', () => {

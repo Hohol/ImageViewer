@@ -4016,17 +4016,46 @@
         restoreGrokJumpSound();
     }
 
+    const GROK_JUMP_ENTRY_KEY = 'ivGrokJumpEntry';
+    let grokJumpEntryPath = null;
+    let grokJumpCurrentPath = null;
+    if (isGrokHost()) {
+        try {
+            const entry = sessionStorage.getItem(GROK_JUMP_ENTRY_KEY);
+            sessionStorage.removeItem(GROK_JUMP_ENTRY_KEY);
+            if (entry === location.pathname) grokJumpEntryPath = grokJumpCurrentPath = entry;
+        } catch (_) {}
+    }
+
+    function leaveEmptyImaginePost(deletedIds = []) {
+        if (grokJumpCurrentPath !== location.pathname) {
+            history.back();
+            return;
+        }
+        // Do not let a later J jump return to this now-empty post.
+        const paths = new Set([grokJumpEntryPath, grokJumpCurrentPath,
+            ...deletedIds.map((id) => '/imagine/post/' + id)]);
+        for (const href of grokSavedPostUrls) {
+            if (paths.has(new URL(href, location.origin).pathname)) grokSavedPostUrls.delete(href);
+        }
+        try { localStorage.setItem(GROK_SAVED_POST_CACHE_KEY, JSON.stringify(Array.from(grokSavedPostUrls))); } catch (_) {}
+        if (!openRandomGrokSavedPost()) navigateGrokBackToSaved();
+    }
+
     function openRandomGrokSavedPost() {
         const mounted = captureGrokSavedPosts();
         const currentPath = location.pathname.replace(/\/$/, '');
         const urls = Array.from(grokSavedPostUrls).filter((href) =>
             new URL(href, location.origin).pathname.replace(/\/$/, '') !== currentPath);
-        if (!urls.length) return;
+        if (!urls.length) return false;
         const url = urls[pickRandomIndex(urls.length, -1)];
+        grokJumpEntryPath = grokJumpCurrentPath = new URL(url, location.origin).pathname;
+        try { sessionStorage.setItem(GROK_JUMP_ENTRY_KEY, grokJumpEntryPath); } catch (_) {}
         rememberGrokJumpSound(url);
         const link = mounted.get(url);
         if (link) link.click();
         else location.assign(url);
+        return true;
     }
 
     /** Keep/Unkeep buttons and the keep-status filter for Grok Imagine. */
@@ -4638,8 +4667,13 @@
         const nextPost = location.pathname.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
         // Grok replaces the post URL for each selection within the same filmstrip.
         if (previousPost && nextPost && imagineFilmstripMediaIds.has(previousPost) && imagineFilmstripMediaIds.has(nextPost)) {
+            if (grokJumpCurrentPath === imagineVisitedPage) grokJumpCurrentPath = location.pathname;
             imagineVisitedPage = location.pathname;
             return;
+        }
+        if (grokJumpCurrentPath !== location.pathname) {
+            grokJumpEntryPath = grokJumpCurrentPath = null;
+            try { sessionStorage.removeItem(GROK_JUMP_ENTRY_KEY); } catch (_) {}
         }
         resetImagineVisitedVideos();
     }
@@ -5487,7 +5521,7 @@
                 const idsForDelete = grokBulkMediaIdsExcludingRecentlyDeleted(imaginePostMediaIdsForDelete(allIds));
                 if (btn.dataset.ivGrokArmed !== '1') {
                     if (!idsForDelete.length) {
-                        history.back();
+                        leaveEmptyImaginePost(allIds);
                         return;
                     }
                     grokDeleteAllArm(idsForDelete.length);
@@ -5495,7 +5529,7 @@
                 }
                 grokDeleteAllDisarm();
                 if (!idsForDelete.length) {
-                    history.back();
+                    leaveEmptyImaginePost(allIds);
                     return;
                 }
                 const ids = idsForDelete;
@@ -5526,7 +5560,7 @@
                     const head = failures.slice(0, 12).join('\n');
                     alert('Image Viewer: Some deletes failed:\n' + head + (failures.length > 12 ? '\n…' : ''));
                 } else {
-                    history.back();
+                    leaveEmptyImaginePost(allIds);
                 }
             });
         }
