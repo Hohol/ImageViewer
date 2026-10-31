@@ -294,7 +294,14 @@
     let imageNavigationSearch = null;
     if (isChatGPTHost()) {
         const style = document.createElement('style');
-        style.textContent = '[data-app-action-timeline-scroll]:focus-visible { outline: none !important; box-shadow: none !important; }';
+        // ChatGPT also paints the transcript focus ring on a decorative sibling.
+        style.textContent = `
+            [data-app-action-timeline-scroll]:focus-visible,
+            [data-app-action-timeline-scroll] ~ [aria-hidden="true"][class*="peer-focus-visible/transcript:ring-"] {
+                outline: none !important;
+                box-shadow: none !important;
+            }
+        `;
         document.head.appendChild(style);
     }
     /** false: fit to viewport; true: natural pixels + scroll. Remembered for this page session. */
