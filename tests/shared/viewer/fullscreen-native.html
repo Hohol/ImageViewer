@@ -1,0 +1,111 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Native Chrome fullscreen test</title>
+<style>
+  body { max-width: 760px; margin: 40px auto; padding: 0 24px; background: #17191d; color: #eee; font: 16px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 26px; }
+  button { padding: 10px 14px; margin: 4px; cursor: pointer; }
+  img { display: block; width: 360px; max-width: 100%; margin: 24px auto; cursor: zoom-in; }
+  body.gallery #stage { position: fixed; inset: 0; background: #17191d; display: grid; place-items: center; }
+  body.gallery img { width: auto; max-width: 90vw; max-height: 90vh; cursor: zoom-out; }
+  pre { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; background: #22262d; padding: 12px; }
+</style>
+<h1>Native Chrome fullscreen test</h1>
+<p>This page uses one native fullscreen entry and one exit. It does not load ImageViewer or any external scripts.</p>
+<ol>
+  <li>Start with Chrome in a normal window and DevTools closed.</li>
+  <li>Click the image to enter fullscreen, then click again to exit. Record the result below.</li>
+  <li>Click the image again, right-click → <b>Copy image</b>, then left-click the image to exit. Record the result.</li>
+</ol>
+<p>If the window stays fullscreen, record that result before restoring the window through Chrome’s own menu.</p>
+<div id="stage"><img id="image" alt="Blue and orange fullscreen test image"></div>
+<div>
+  <button id="restored">Window restored</button>
+  <button id="stuck">Window stayed fullscreen</button>
+  <button id="download">Download trace</button>
+</div>
+<p id="status" aria-live="polite">Ready. Click the image.</p>
+<details><summary>Recorded events</summary><pre id="trace"></pre></details>
+<script>
+  const image = document.getElementById('image');
+  const status = document.getElementById('status');
+  const trace = document.getElementById('trace');
+  const events = [];
+  const started = performance.now();
+  let run = 0;
+  let busy = false;
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = 480;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#2862af';
+  ctx.fillRect(0, 0, 720, 480);
+  ctx.fillStyle = '#f7a34b';
+  ctx.fillRect(80, 80, 560, 320);
+  ctx.fillStyle = '#182b46';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillText('Native fullscreen test', 165, 250);
+  image.src = canvas.toDataURL('image/png');
+
+  function record(event, detail = {}) {
+    const entry = {
+      ms: Math.round(performance.now() - started), run, event,
+      api: !!document.fullscreenElement,
+      displayMode: matchMedia('(display-mode: fullscreen)').matches,
+      inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight],
+      screen: [screen.width, screen.height], available: [screen.availWidth, screen.availHeight],
+      dpr: devicePixelRatio, focused: document.hasFocus(), ...detail,
+    };
+    events.push(entry);
+    if (events.length > 500) events.shift();
+    trace.textContent = events.map(e => JSON.stringify(e)).join('\n');
+  }
+  function samples(label) {
+    for (const delay of [100, 500, 1500]) setTimeout(() => record(label + ' +' + delay + 'ms'), delay);
+  }
+  image.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    const entering = !document.body.classList.contains('gallery');
+    const action = entering ? 'enter' : 'exit';
+    if (entering) ++run;
+    record(action + ' called');
+    try {
+      if (entering) {
+        document.body.classList.add('gallery');
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+      record(action + ' resolved');
+    } catch (error) {
+      record(action + ' rejected', { name: error.name, error: error.message });
+    } finally {
+      if (!document.fullscreenElement) document.body.classList.remove('gallery');
+      busy = false;
+      status.textContent = 'Run ' + run + ': ' + action + ' finished. Record whether the window restored.';
+      samples(action);
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    record('fullscreenchange');
+    if (!document.fullscreenElement) document.body.classList.remove('gallery');
+  });
+  document.addEventListener('contextmenu', () => record('contextmenu'));
+  for (const type of ['resize', 'focus', 'blur']) window.addEventListener(type, () => record(type));
+  for (const id of ['restored', 'stuck']) document.getElementById(id).addEventListener('click', () => {
+    record('observed outcome', { outcome: id });
+    status.textContent = 'Run ' + run + ': recorded ' + (id === 'restored' ? 'window restored.' : 'window stayed fullscreen.');
+  });
+  document.getElementById('download').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify({ userAgent: navigator.userAgent, events }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'chrome-native-fullscreen.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  record('ready');
+</script>

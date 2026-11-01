@@ -44,7 +44,9 @@ belongs in `support/`.
 | Local image navigation | Alphabetical ordering, same-folder filtering, duplicate links, encoded filenames, key routing, standalone modifiers versus combinations, help dismissal, held scrolling, and fullscreen/Escape routing (Node; browser APIs mocked). Real Chrome directory loading and fullscreen require a browser smoke check. |
 | Gallery hotkey selection | Nearest offscreen image by viewport-center distance, hidden/excluded images, visible-image priority, and ChatGPT cached-history fallback (mocked layout) |
 | Shared viewer navigation | Partial: cached navigation, ChatGPT search handoff, repeated keys, stale-result cancellation, basic non-ChatGPT fallback |
-| Gallery browser fullscreen | Mode transitions retain the overlay; failed entry, repeated requests, and closing in-page mode (mocked browser API) |
+| Gallery browser fullscreen | Mode transitions retain the overlay; failed entry, repeated requests, and closing in-page mode; single native exit after a context menu despite stale fullscreen indicators, native Escape, already-inactive API, and exit failures (mocked browser API; native Chrome window restoration still needs a manual check) |
+| Video browser fullscreen | Single native exit; native exit events restore video controls, styles, and listeners; inactive API and exit failures do not trigger retries or re-entry (mocked browser API) |
+| Video frame copying | C selects fullscreen/targeted/visible media, preserves image copying and typing shortcuts; full-resolution PNG capture, overlapping-copy guard, separate CORS-player fallback, readiness checks, failures, and timeout cleanup (mocked media and clipboard APIs; real site permissions require a manual check) |
 | ChatGPT gallery | Scan, passive capture, virtualized history, directional searches, boundaries (including mounted-edge detection, full-scan completion without the extra pagination wait at confirmed starts, retention across older chunks/remounts, and pagination/incomplete-content guards), edited branches, long text spans, paired generated images regrouped into shared message containers and loaded in reverse order, large-preview/picker duplicates and selection changes |
 | ChatGPT search-image cards | Excluded from clicks, navigation, and gallery capture; generated images and generic image/button components stay eligible |
 | ChatGPT SVG components | Marked SVG components are excluded; ordinary SVG images stay eligible |
@@ -60,7 +62,7 @@ belongs in `support/`.
 | Imagine selection after deletion | Removed or hidden selected videos advance to the next surviving video, falling back to the previous one; unselected deletions, empty lists, images, and unrelated route changes do not trigger selection (mocked DOM, page/fullscreen modes) |
 | Imagine saved navigation | J caches loaded post URLs across unmounts, in-app navigation, and browser sessions via local storage, validates restored URLs, deduplicates remounts, preserves conversation URLs, skips hidden links, and respects typing, modifiers, composition, repeated keys, and empty grids (mocked DOM) |
 | Imagine video navigation | R random selection, lowercase r unvisited selection and page-leave reset, A/D previous/next routing in page/fullscreen modes, no wrapping, image skipping, avoiding the current video, deletions and hidden wrappers, updated index totals, empty/single-video cases, typing and modifier guards (mocked DOM) |
-| Other shared viewer features | No dedicated tests yet for fit/zoom, native browser fullscreen behavior, clipboard, new-tab opening, hotkeys, video controls, or loop export |
+| Other shared viewer features | No dedicated tests yet for fit/zoom, native browser fullscreen behavior, image clipboard encoding, new-tab opening, other hotkeys/video controls, or loop export |
 
 ## Command-line checks
 
@@ -120,6 +122,16 @@ Register browser suites once in `support/browser/registry.js`, with a descriptiv
 ID, fixture page, and case script. Other sites and shared features can supply
 their own fixtures without depending on ChatGPT's timeline. Browser cases use
 `*.browser.js`; Node cases use `*.test.cjs`.
+
+### Native fullscreen reproduction (manual)
+
+Open `/shared/viewer/fullscreen-native.html` on the test server in Chrome. This
+standalone page does not load ImageViewer. Compare ordinary image fullscreen
+entry/exit with right-click → Copy image → exit, starting each run from a normal
+browser window with DevTools closed. Record each outcome using the page buttons,
+then download the trace. The page records API results and window dimensions;
+the user must verify whether Chrome's native window actually restored. This
+manual reproduction is separate from the automated suite.
 
 ## Fixture design and limits
 

@@ -18,6 +18,12 @@ const sections = {
     ['    async function toggleGalleryBrowserFullscreen()', '    function scrollToImage()'],
     ['    // Close overlay on real fullscreen exit.', '    // === VIDEO FULLSCREEN FUNCTIONALITY ==='],
   ],
+  'shared/viewer/video-fullscreen': [
+    ['    async function exitVideoFullscreen()', '    async function toggleGalleryBrowserFullscreen()'],
+    ['    // Toggle fullscreen for video element', "    const IV_VIDEO_FS_BTN_ATTR ="],
+    ['    // Apply styles to videos when entering fullscreen', '    function isKeyboardTypingTarget('],
+  ],
+  'shared/viewer/video-frame-copy': ['    function videoFramePng(', '    function applyOverlayImageFitMode()'],
   'shared/viewer/image-eligibility': [
     ['    function isChatGPTProfileImage(', '    function viewerImageSrcForNewTab('],
     ['    function isGeminiOptInResultSrc(', '    // Grok: chat cards use'],

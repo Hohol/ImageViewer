@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.45
+// @version      2.46
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -461,54 +461,6 @@
         return overlayFitNative ? 'default' : 'zoom-out';
     }
 
-    /** true: DevTools console logs fullscreen exit / resync steps. Set false normally. */
-    const IV_FULLSCREEN_EXIT_DEBUG = false;
-
-    function ivFullscreenDebugSnapshot(extra) {
-        const fsEl =
-            document.fullscreenElement ||
-            document.webkitFullscreenElement ||
-            document.mozFullScreenElement ||
-            document.msFullscreenElement;
-        let displayMode = null;
-        try {
-            displayMode = window.matchMedia && window.matchMedia('(display-mode: fullscreen)').matches;
-        } catch (e) {}
-        const snap = {
-            api: isFullscreenApiActive(),
-            visual: isBrowserWindowVisuallyFullscreen(),
-            overlay: !!overlay,
-            pending: ivPendingVisualFullscreenExit,
-            intentional: ivIntentionalFullscreenExit,
-            contextMenu: ivContextMenuInFullscreen,
-            userAct: hasTransientUserActivation(),
-            fsTag: fsEl ? fsEl.tagName : null,
-            displayMode,
-            webkitIsFullScreen: document.webkitIsFullScreen,
-            ih: window.innerHeight,
-            iw: window.innerWidth,
-            oh: window.outerHeight,
-            ow: window.outerWidth,
-            sh: window.screen.availHeight || window.screen.height,
-            sw: window.screen.availWidth || window.screen.width,
-            screenH: window.screen.height,
-        };
-        if (extra) Object.assign(snap, extra);
-        return snap;
-    }
-
-    function ivLogFullscreenExit(message, detail) {
-        if (!IV_FULLSCREEN_EXIT_DEBUG) return;
-        const snap = ivFullscreenDebugSnapshot(detail);
-        let text;
-        try {
-            text = JSON.stringify(snap);
-        } catch (e) {
-            text = String(snap);
-        }
-        console.log('[Image Viewer fullscreen exit] ' + message + ' ' + text);
-    }
-
     function isFullscreenApiActive(doc) {
         doc = doc || document;
         return !!(
@@ -519,179 +471,8 @@
         );
     }
 
-    function hasTransientUserActivation() {
-        try {
-            if (navigator.userActivation) return !!navigator.userActivation.isActive;
-        } catch (e) {}
-        return true;
-    }
-
-    let ivIntentionalFullscreenExit = false;
     let galleryInPage = false;
     let galleryFullscreenPending = false;
-    let ivPendingVisualFullscreenExit = false;
-    let ivStuckFsElement = null;
-    /** Right-click while fullscreen can desync API vs window; only then do enter→exit. */
-    let ivContextMenuInFullscreen = false;
-
-    /** Heuristic: browser window still chromeless even though the Fullscreen API already exited. */
-    function isBrowserWindowVisuallyFullscreen() {
-        try {
-            if (window.matchMedia) {
-                if (window.matchMedia('(display-mode: fullscreen)').matches) return true;
-            }
-        } catch (e) {}
-        if (document.webkitIsFullScreen === true) return true;
-        const margin = 80;
-        const ih = window.innerHeight;
-        const iw = window.innerWidth;
-        const oh = window.outerHeight;
-        const ow = window.outerWidth;
-        const sh = window.screen.availHeight || window.screen.height;
-        const sw = window.screen.availWidth || window.screen.width;
-        if (ih >= sh - margin && iw >= sw - margin) return true;
-        if (oh >= sh - margin && ow >= sw - margin) return true;
-        if (ih >= window.screen.height - 50) return true;
-        return false;
-    }
-
-    function resyncStuckBrowserFullscreen(elementForReentry, options) {
-        options = options || {};
-        const doc = document;
-        const exitFn =
-            doc.exitFullscreen ||
-            doc.webkitExitFullscreen ||
-            doc.mozCancelFullScreen ||
-            doc.msExitFullscreen;
-        if (!exitFn) return Promise.resolve();
-
-        if (!options.allowEnter || !hasTransientUserActivation()) {
-            ivLogFullscreenExit('resync exit-only', {
-                allowEnter: !!options.allowEnter,
-                userActivation: hasTransientUserActivation(),
-            });
-            return Promise.resolve(exitFn.call(doc)).catch((err) => {
-                ivLogFullscreenExit('resync exit-only failed', { message: err && err.message });
-            });
-        }
-
-        const el = elementForReentry || document.documentElement;
-        const requestFn =
-            el.requestFullscreen ||
-            el.webkitRequestFullscreen ||
-            el.mozRequestFullScreen ||
-            el.msRequestFullscreen;
-        if (!requestFn) {
-            return Promise.resolve(exitFn.call(doc)).catch((err) => {
-                ivLogFullscreenExit('resync failed', { message: err && err.message });
-            });
-        }
-        ivLogFullscreenExit('resync enter→exit (user gesture)');
-        try {
-            const entered = requestFn.call(el);
-            return Promise.resolve(entered)
-                .then(() => exitFn.call(doc))
-                .catch((err) => {
-                    ivLogFullscreenExit('resync failed', { message: err && err.message });
-                });
-        } catch (err) {
-            ivLogFullscreenExit('resync failed', { message: err && err.message });
-            return Promise.resolve();
-        }
-    }
-
-    function scheduleFullscreenExitResync(elementForReentry, options) {
-        options = options || {};
-        const el = elementForReentry || document.documentElement;
-        const force = !!options.force;
-        const allowEnterNow = !!options.allowEnter && hasTransientUserActivation();
-
-        const maybeResync = (label, canEnter) => {
-            if (document.hidden) {
-                ivLogFullscreenExit('skip resync: document hidden', { label });
-                return;
-            }
-            if (isFullscreenApiActive()) {
-                ivLogFullscreenExit('skip resync: API still fullscreen', { label });
-                return;
-            }
-            const visual = isBrowserWindowVisuallyFullscreen();
-            if (!force && !visual) {
-                ivLogFullscreenExit('skip resync: not visually fullscreen', { label, force, visual });
-                return;
-            }
-            ivLogFullscreenExit(canEnter ? 'resync enter→exit' : 'resync exit-only (scheduled)', {
-                label,
-                force,
-                visual,
-            });
-            void resyncStuckBrowserFullscreen(el, { allowEnter: canEnter });
-        };
-
-        maybeResync('0ms', allowEnterNow);
-        setTimeout(() => maybeResync('100ms', false), 100);
-        setTimeout(() => maybeResync('300ms', false), 300);
-    }
-
-    function resyncAfterContextMenu(elementForReentry, options) {
-        options = options || {};
-        if (!ivContextMenuInFullscreen) return false;
-        if (options.requireVisual && !isBrowserWindowVisuallyFullscreen()) return false;
-        const el = elementForReentry || document.documentElement;
-        if (hasTransientUserActivation()) {
-            void resyncStuckBrowserFullscreen(el, { allowEnter: true });
-        } else {
-            armStuckVisualFullscreenExit(el);
-        }
-        scheduleFullscreenExitResync(el, options.force ? { force: true } : {});
-        ivContextMenuInFullscreen = false;
-        return true;
-    }
-
-    function armStuckVisualFullscreenExit(elementForReentry) {
-        ivPendingVisualFullscreenExit = true;
-        ivStuckFsElement = elementForReentry || document.documentElement;
-        ivLogFullscreenExit('armed stuck visual fullscreen exit');
-        if (!hasTransientUserActivation()) return;
-        void resyncStuckBrowserFullscreen(ivStuckFsElement, { allowEnter: true }).then(() => {
-            if (isFullscreenApiActive() || isBrowserWindowVisuallyFullscreen()) return;
-            ivPendingVisualFullscreenExit = false;
-            clearOverlay();
-        });
-    }
-
-    function consumeStuckVisualFullscreenExit(e) {
-        if (!ivPendingVisualFullscreenExit) return false;
-        if (isFullscreenApiActive()) {
-            ivLogFullscreenExit('consume skip: API still fullscreen (disarm)', {
-                ev: e && e.type,
-                target: e && e.target && e.target.tagName,
-            });
-            ivPendingVisualFullscreenExit = false;
-            return false;
-        }
-        if (!isBrowserWindowVisuallyFullscreen()) {
-            ivLogFullscreenExit('consume skip: not visually fullscreen (disarm)', {
-                ev: e && e.type,
-                target: e && e.target && e.target.tagName,
-            });
-            ivPendingVisualFullscreenExit = false;
-            return false;
-        }
-        if (e) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-        }
-        ivPendingVisualFullscreenExit = false;
-        ivIntentionalFullscreenExit = true;
-        ivLogFullscreenExit('consume stuck visual fullscreen exit (user gesture)', {
-            ev: e && e.type,
-            target: e && e.target && e.target.tagName,
-        });
-        clearOverlay();
-        void resyncStuckBrowserFullscreen(ivStuckFsElement, { allowEnter: true });
-        return true;
-    }
 
     /** true: DevTools console logs each step of copy-to-clipboard (C on the page or in gallery mode). Set false normally. */
     const IV_IMAGE_CLIPBOARD_DEBUG = false;
@@ -2752,7 +2533,6 @@
         cancelImageNavigationSearch();
         if (!overlay) return;
         ivChatGPTNavigationDebug?.record('overlay-close');
-        ivLogFullscreenExit('clearOverlay');
         stopOverlayArrowScroll();
         stopCursorAutoHide();
         overlayNativeScrollBySrc.clear();
@@ -2762,40 +2542,16 @@
         galleryInPage = false;
     }
 
-    // BROWSER BUG WORKAROUND: When user right-clicks and uses context menu (e.g., "Copy image"
-    // or "Copy video frame") while in fullscreen, the browser decouples the Fullscreen API
-    // state from the actual browser window fullscreen state. The API reports we're not in
-    // fullscreen (fullscreenElement is null), but the browser window remains visually fullscreen.
-    // To fix this, we re-enter fullscreen via the API to re-sync the states, then immediately
-    // exit, which properly exits both API and window fullscreen.
-    function exitFullscreenWithWorkaround(elementForReentry) {
-        const doc = document;
-        const exitFn =
-            doc.exitFullscreen ||
-            doc.webkitExitFullscreen ||
-            doc.mozCancelFullScreen ||
-            doc.msExitFullscreen;
-
-        if (!exitFn) return Promise.resolve();
-
-        ivIntentionalFullscreenExit = true;
-        const el = elementForReentry || document.documentElement;
-        const result = exitFn.call(doc);
-
-        if (!isFullscreenApiActive(doc)) {
-            resyncAfterContextMenu(el, { requireVisual: true });
-        } else if (ivContextMenuInFullscreen) {
-            scheduleFullscreenExitResync(el);
+    async function exitVideoFullscreen() {
+        if (!isFullscreenApiActive()) return;
+        const exitFn = document.exitFullscreen || document.webkitExitFullscreen ||
+            document.mozCancelFullScreen || document.msExitFullscreen;
+        if (!exitFn) return;
+        try {
+            await exitFn.call(document);
+        } catch (error) {
+            ivLogVideoFullscreen('exit failed', { name: error?.name, message: error?.message });
         }
-
-        setTimeout(() => {
-            if (isFullscreenApiActive(doc)) {
-                ivLogFullscreenExit('retry exitFullscreen');
-                exitFn.call(doc);
-            }
-        }, 100);
-
-        return result;
     }
 
     async function toggleGalleryBrowserFullscreen() {
@@ -2810,8 +2566,6 @@
         if (!action) { showViewerToast('Browser fullscreen is unavailable'); return; }
         galleryFullscreenPending = true;
         galleryInPage = exiting;
-        ivPendingVisualFullscreenExit = false;
-        ivIntentionalFullscreenExit = false;
         try {
             await action.call(target);
         } catch (error) {
@@ -2819,7 +2573,6 @@
                 galleryInPage = wasInPage;
                 showViewerToast('Could not toggle browser fullscreen');
             }
-            ivLogFullscreenExit('gallery fullscreen toggle failed', { name: error.name });
         } finally {
             galleryFullscreenPending = false;
         }
@@ -2828,32 +2581,26 @@
     function hideGallery() {
         const doc = document;
         const apiFs = isFullscreenApiActive(doc);
-        const hadOverlay = !!overlay;
-        const docEl = document.documentElement;
-
-        ivLogFullscreenExit('hideGallery', { apiFs, hadOverlay });
-        ivIntentionalFullscreenExit = true;
-        ivPendingVisualFullscreenExit = false;
-
-        if (!apiFs && galleryInPage) {
-            clearOverlay();
-            ivIntentionalFullscreenExit = false;
-            return;
-        }
-
-        if (!apiFs && hadOverlay) {
-            clearOverlay();
-            resyncAfterContextMenu(docEl, { force: true });
-            return;
-        }
-
-        const result = exitFullscreenWithWorkaround(docEl);
-        if (result && result.then) {
-            result.catch(() => clearOverlay());
-        }
+        const closingOverlay = overlay;
 
         if (!apiFs) {
             clearOverlay();
+            return;
+        }
+
+        const finishClose = () => {
+            if (overlay !== closingOverlay) return;
+            clearOverlay();
+        };
+        const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen ||
+            doc.mozCancelFullScreen || doc.msExitFullscreen;
+        // A context menu alone is not evidence that native fullscreen broke. In
+        // particular, window dimensions can still reflect fullscreen during exit.
+        try {
+            const result = exitFn?.call(doc);
+            return Promise.resolve(result).then(finishClose, finishClose);
+        } catch {
+            finishClose();
         }
     }
 
@@ -3006,6 +2753,129 @@
             ivLogImageClipboard('clipboard.write failed', { name: e && e.name, message: e && e.message });
             showViewerToast('Copy failed');
         }
+    }
+
+    function videoFramePng(video) {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Frame capture unavailable');
+        ctx.drawImage(video, 0, 0);
+        return new Promise((resolve, reject) => {
+            canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Frame encoding failed')), 'image/png');
+        });
+    }
+
+    function waitForVideoFrameEvent(video, event, start) {
+        return new Promise((resolve, reject) => {
+            const finish = error => {
+                clearTimeout(timer);
+                video.removeEventListener(event, ready);
+                video.removeEventListener('error', failed);
+                error ? reject(error) : resolve();
+            };
+            const ready = () => finish();
+            const failed = () => finish(new Error('Video frame could not be loaded'));
+            const timer = setTimeout(() => finish(new Error('Video frame loading timed out')), 15000);
+            video.addEventListener(event, ready);
+            video.addEventListener('error', failed);
+            try { start(); } catch (error) { finish(error); }
+        });
+    }
+
+    async function clipboardPngBlobFromVideo(video) {
+        // Freeze the pixels immediately, before asynchronous PNG encoding.
+        const time = video.currentTime;
+        const src = video.currentSrc || video.src;
+        try {
+            return await videoFramePng(video);
+        } catch (error) {
+            if (error?.name !== 'SecurityError' || !src) throw error;
+        }
+        // A cross-origin video loaded without CORS taints canvas. Retry with an
+        // isolated CORS-enabled player; never reload, seek, or pause the real one.
+        const copy = document.createElement('video');
+        copy.muted = true;
+        copy.preload = 'auto';
+        try {
+            // Grok assets may require cookies. Try credentialed CORS for a player
+            // without a crossOrigin setting, then anonymous for public CDN assets.
+            const firstMode = video.crossOrigin === null || video.crossOrigin === undefined
+                ? 'use-credentials' : video.crossOrigin || 'anonymous';
+            const modes = [...new Set([firstMode, 'use-credentials', 'anonymous'])];
+            for (const mode of modes) {
+                copy.crossOrigin = mode;
+                try {
+                    await waitForVideoFrameEvent(copy, 'loadeddata', () => { copy.src = src; copy.load(); });
+                    break;
+                } catch (error) {
+                    if (mode === modes[modes.length - 1]) throw error;
+                }
+            }
+            if (time !== copy.currentTime) {
+                await waitForVideoFrameEvent(copy, 'seeked', () => { copy.currentTime = time; });
+            }
+            return await videoFramePng(copy);
+        } finally {
+            copy.removeAttribute('src');
+            copy.load();
+        }
+    }
+
+    let videoFrameCopyPending = false;
+    async function copyVideoFrameToClipboard(video) {
+        if (videoFrameCopyPending) return;
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+            showViewerToast('Copy not supported');
+            return;
+        }
+        if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight || video.seeking) {
+            showViewerToast('Video frame is not ready yet');
+            return;
+        }
+        videoFrameCopyPending = true;
+        let frameFailure = null;
+        showViewerToast('Copying video frame…', 30000);
+        try {
+            const frame = clipboardPngBlobFromVideo(video);
+            // Handle encoding failures even if clipboard permission is rejected first.
+            void frame.catch(error => { frameFailure = error; });
+            // Start the clipboard write in the key gesture, supplying the PNG asynchronously.
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': frame })]);
+            showViewerToast('Video frame copied to clipboard');
+        } catch (error) {
+            const cause = frameFailure || error;
+            const reason = cause?.name === 'NotAllowedError' ? 'clipboard permission denied'
+                : (cause?.message || cause?.name || 'unknown error');
+            showViewerToast('Could not copy video frame: ' + reason.slice(0, 100), 7000);
+        } finally {
+            videoFrameCopyPending = false;
+        }
+    }
+
+    function handleMediaCopyKeydown(e) {
+        if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || overlay || isKeyboardTypingTarget(e.target)) return;
+        const fs = document.fullscreenElement || document.webkitFullscreenElement ||
+            document.mozFullScreenElement || document.msFullscreenElement;
+        let video = fs?.tagName === 'VIDEO' ? fs : null;
+        let img = null;
+        if (!video) {
+            img = viewerImageFromEventTarget(e.target);
+            if (!img && e.target?.tagName === 'VIDEO') video = e.target;
+            if (!img && !video) {
+                video = viewerVideoFromPointer();
+                if (!video) img = viewerImageFromPointer();
+            }
+            if (!img && !video) video = getTargetVideo(e);
+            if (!img && !video) img = pickBestVisibleEligibleImage();
+        }
+        if (!video && !img) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.repeat) return;
+        if (video) void copyVideoFrameToClipboard(video);
+        else void copyImageToClipboard(img);
     }
 
     function applyOverlayImageFitMode() {
@@ -3223,7 +3093,6 @@
     function showGallery(img) {
         if (ivChatGPTGallery?.scanning) return;
         if (!img || isExcludedImage(img)) return;
-        ivContextMenuInFullscreen = false;
         galleryInPage = false;
         
         imgs = collectNavigableImages();
@@ -3234,7 +3103,6 @@
         currentIndex = imgs.findIndex(imgEl => key ? ivChatGPTGallery.key(imgEl) === key : imgEl.src === img.src);
         if (currentIndex < 0) currentIndex = 0;
 
-        ivLogFullscreenExit('showGallery');
         // Enter browser fullscreen
         const docEl = document.documentElement;
         const requestFn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
@@ -3313,23 +3181,6 @@
             e.preventDefault(); e.stopPropagation();
         }
     }, true));
-
-    document.addEventListener('click', (e) => {
-        if (e.button !== 0) return;
-        consumeStuckVisualFullscreenExit(e);
-    }, true);
-
-    document.addEventListener('contextmenu', () => {
-        if (!overlay && !isFullscreenApiActive()) return;
-        ivContextMenuInFullscreen = true;
-        ivLogFullscreenExit('contextmenu in fullscreen');
-    }, true);
-
-    document.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape' && e.code !== 'KeyF' && e.code !== 'Slash') return;
-        if (e.metaKey || e.ctrlKey || e.altKey) return;
-        consumeStuckVisualFullscreenExit(e);
-    }, true);
 
     // Open on left-click for non-excluded images
     document.addEventListener('click', e => {
@@ -3437,26 +3288,15 @@
         if (!overlayScrollDir) stopOverlayArrowScroll();
     }, true);
 
-    // Close overlay on real fullscreen exit. "Copy image" can fire a spurious API
-    // exit while the window stays visually fullscreen — keep the overlay so the
-    // next click/Esc can re-sync and leave fullscreen.
+    // Close overlay on real fullscreen exit. Do not re-enter based on window-size
+    // or display-mode heuristics: they can be true even before gallery entry.
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
     .forEach(evt => document.addEventListener(evt, () => {
-        ivLogFullscreenExit('fullscreenchange', { evt });
         if (overlay && !isFullscreenApiActive()) {
             if (galleryInPage) {
-                ivIntentionalFullscreenExit = false;
                 return;
             }
-            if (ivIntentionalFullscreenExit) {
-                ivIntentionalFullscreenExit = false;
-                ivLogFullscreenExit('fullscreenchange: intentional API exit');
-                clearOverlay();
-                resyncAfterContextMenu(document.documentElement, { requireVisual: true });
-                return;
-            }
-            ivLogFullscreenExit('fullscreenchange: spurious API exit, keep overlay');
-            armStuckVisualFullscreenExit(document.documentElement);
+            clearOverlay();
         }
     }));
 
@@ -3614,12 +3454,13 @@
                 ['F or /', 'Toggle image gallery or video fullscreen'],
                 ['R', 'Random image (outside Imagine)'],
                 ['T', 'Open image in new tab (page or gallery)'],
-                ['C', 'Copy image to clipboard (page or gallery)'],
+                ['C', 'Copy image or current video frame'],
             ],
         },
         {
             title: 'Video',
             items: [
+                ['C', 'Copy current frame to clipboard'],
                 ['Space', 'Play / pause'],
                 ['L', 'Toggle loop'],
                 ['I', 'Set loop in-point'],
@@ -5874,7 +5715,7 @@
 
         if (fsEl === video) {
             ivLogVideoFullscreen('exit fullscreen', { fsTag: fsEl.tagName });
-            exitFullscreenWithWorkaround(video);
+            void exitVideoFullscreen();
             return;
         }
 
@@ -6186,9 +6027,6 @@
         });
     });
     
-    // Track which video is in fullscreen for workaround
-    let lastFullscreenVideo = null;
-    
     // Apply styles to videos when entering fullscreen
     ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange']
     .forEach(evt => document.addEventListener(evt, () => {
@@ -6198,7 +6036,6 @@
         if (fullscreenElement && fullscreenElement.tagName === 'VIDEO') {
             // Just entered fullscreen with a video - apply styles
             const video = fullscreenElement;
-            lastFullscreenVideo = video; // Track for workaround
             
             // Clear loop if switching to a different video
             if (loopVideo && loopVideo !== video) clearLoop();
@@ -6279,17 +6116,6 @@
                 delete video.dataset.originalClass;
             });
             
-            // Apply browser bug workaround for videos (same bug as with images)
-            if (lastFullscreenVideo) {
-                const videoForWorkaround = lastFullscreenVideo;
-                lastFullscreenVideo = null;
-                if (ivIntentionalFullscreenExit) {
-                    ivIntentionalFullscreenExit = false;
-                    resyncAfterContextMenu(videoForWorkaround);
-                } else if (ivContextMenuInFullscreen) {
-                    armStuckVisualFullscreenExit(videoForWorkaround);
-                }
-            }
         }
     }));
 
@@ -6864,17 +6690,9 @@
             return;
         }
 
-        // C: copy image to clipboard (overlay uses its own keydown handler)
+        // C: copy the image or current video frame (gallery has its own handler).
         if (e.code === 'KeyC') {
-            if (e.metaKey || e.ctrlKey || e.altKey || overlay) return;
-            let img = viewerImageFromEventTarget(e.target) || viewerImageFromPointer();
-            if (!img && isKeyboardTypingTarget(e.target)) return;
-            if (!img) img = pickBestVisibleEligibleImage();
-            if (img) {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                void copyImageToClipboard(img);
-            }
+            handleMediaCopyKeydown(e);
             return;
         }
         
