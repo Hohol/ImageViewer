@@ -50,6 +50,32 @@ function setup(localStorage, sessionStorage) {
     removeStrip: () => { stripPresent = false; } };
 }
 
+test('Saved blocks arrival autofocus but permits search-triggered focus without clicking the prompt', () => {
+  const h = setup();
+  const events = {};
+  let blurs = 0;
+  const editor = { matches: () => true, blur() { blurs++; h.context.document.activeElement = null; } };
+  h.context.document.addEventListener = (name, fn) => { events[name] = fn; };
+  h.context.location.pathname = '/imagine/saved';
+  h.context.document.activeElement = editor;
+  h.context.bindGrokSavedComposerFocus();
+  assert.equal(blurs, 1, 'initial autofocus is suppressed');
+  h.context.document.activeElement = editor;
+  events.focusin();
+  assert.equal(blurs, 2, 'delayed autofocus is suppressed before interaction');
+  events.pointerdown({ target: { closest: () => null } }); // Search wrapper, not the prompt.
+  h.context.document.activeElement = editor;
+  events.focusin();
+  assert.equal(blurs, 2, 'search can focus its editor without a prompt click');
+  h.context.history.pushState({}, '', '/imagine/post/example');
+  h.context.history.pushState({}, '', '/imagine/saved');
+  assert.equal(blurs, 3, 'returning to Saved rearms arrival suppression');
+  events.keydown({ key: 'Tab' });
+  h.context.document.activeElement = editor;
+  events.focusin();
+  assert.equal(blurs, 3, 'keyboard focus navigation remains available');
+});
+
 test('post Back and Escape always navigate to Saved, retaining dismissal priorities', () => {
   const h = setup();
   const destinations = [];

@@ -3738,9 +3738,11 @@
         }
         // Grok may focus the composer after rendering, or retain focus across routes.
         document.addEventListener('focusin', sync, true);
-        document.addEventListener('pointerdown', (event) => {
+        document.addEventListener('pointerdown', () => {
             sync();
-            if (savedPage && event.target.closest?.(composerSelector)) allowFocus = true;
+            // Search can focus an editor indirectly through its wrapper/control.
+            // Suppress arrival autofocus only, not focus caused by deliberate clicks.
+            if (savedPage) allowFocus = true;
         }, true);
         document.addEventListener('keydown', (event) => {
             // Keep deliberate keyboard focus navigation available as well as clicks.
