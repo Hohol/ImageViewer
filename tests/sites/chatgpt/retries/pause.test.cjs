@@ -8,7 +8,7 @@ test('unloaded-target waits freeze timeout and preserve attempt status', async (
   let now = 0, mounted = false;
   const status = { textContent: 'Attempt 2/10 · Generating' };
   const session = { turnKey: 'target' };
-  const context = vm.createContext({ Date: { now: () => now }, status, check() {},
+  const context = vm.createContext({ Date: { now: () => now }, status, check() {}, updateGenerationTitle() {},
     editorSelector: 'textarea', latest: () => mounted ? { id: 'target', querySelector: () => ({}) } : null,
     key: t => t.id,
     setTimeout: fn => { now += 250; if (now >= 2000) mounted = true; fn(); } });
@@ -40,4 +40,29 @@ test('an open editor counts as a mounted turn without its display bubble', () =>
   const context = vm.createContext({ editorSelector: 'textarea', latest: () => current, key: t => t.id });
   vm.runInContext(block, context);
   assert.equal(context.targetMounted({ turnKey: 'target' }), true);
+});
+
+test('submitted d after the previous tail does not require scrolling to the response bottom', async () => {
+  const previous = { id: 'previous' };
+  const current = { id: 'new', querySelector: () => ({}) };
+  let turns = [previous, current];
+  const status = { textContent: 'Attempt 0/10 · Generating' };
+  const context = vm.createContext({ Date, status, check() {}, updateGenerationTitle() {},
+    editorSelector: 'textarea', turnSelector: '[data-turn-key]',
+    latest: () => current, key: t => t.id, prompt: () => 'd',
+    timeline: () => ({ querySelectorAll: () => turns }),
+    latestPosition: () => ({ atLatest: false }),
+    setTimeout() { throw new Error('Loaded new message must not pause'); } });
+  vm.runInContext(block, context);
+  const session = { turnKey: 'previous', previousTurn: 'previous', prompt: 'd',
+    manualPrompt: true, allowTurnReplacement: true };
+  await context.waitFor(session, () => true, 15000, 'Submitted prompt did not appear');
+  assert.equal(status.textContent, 'Attempt 0/10 · Generating');
+  turns = [current, previous];
+  assert.equal(context.targetMounted(session), false, 'older matching d cannot be adopted');
+  turns = [current];
+  assert.equal(context.targetMounted(session), false, 'unanchored history still needs the tail check');
+  turns = [previous, current];
+  session.allowTurnReplacement = false;
+  assert.equal(context.targetMounted(session), false, 'locked sessions still require their target');
 });

@@ -822,7 +822,7 @@
                 unreadGeneration = false;
             }
             const generating = !generationFinished && (busy(latest()) || (run && !run.autosend));
-            const prefix = destroyed ? '' : generating ? '⏳ ' : unreadGeneration === 'failed' ? '❌ ' : unreadGeneration ? '✅ ' : '';
+            const prefix = destroyed ? '' : run?.paused ? '⏸️ ' : generating ? '⏳ ' : unreadGeneration === 'failed' ? '❌ ' : unreadGeneration ? '✅ ' : '';
             writtenTitle = prefix + baseTitle;
             if (document.title !== writtenTitle) document.title = writtenTitle;
         }
@@ -934,10 +934,18 @@
             if (!current || (!current.querySelector('[data-user-message-bubble]') && !current.querySelector(editorSelector))) return false;
             if (key(current) === session.turnKey) return true;
             if (!session.turnKey) return latestPosition(timeline(), current).atLatest;
-            // Edit/send can replace the turn ID. Only adopt its replacement at
-            // the conversation tail, never a matching prompt in older history.
-            return session.allowTurnReplacement && prompt(current).trim() === session.prompt?.trim() &&
-                latestPosition(timeline(), current).atLatest;
+            if (!session.allowTurnReplacement || prompt(current).trim() !== session.prompt?.trim()) return false;
+            // A newly submitted message follows the previous tail even when
+            // ChatGPT leaves the viewport above the bottom of its response.
+            // Older history cannot follow that previously captured tail.
+            if (session.manualPrompt) {
+                const turns = Array.from(timeline()?.querySelectorAll(turnSelector) || []);
+                const previous = turns.findIndex(turn => key(turn) === session.previousTurn);
+                if (previous >= 0 && turns.indexOf(current) > previous) return true;
+            }
+            // Edits may replace the old turn entirely; retain the tail check
+            // when the previous message is no longer available as an anchor.
+            return latestPosition(timeline(), current).atLatest;
         }
         async function waitFor(session, predicate, timeout, message) {
             const end = sessionTime(session) + timeout;
@@ -951,6 +959,8 @@
                         previousStatus = status.textContent;
                         const prefix = previousStatus.match(/^Attempt \d+\/\d+ · /)?.[0] || '';
                         status.textContent = prefix + 'Paused · Scroll back to latest';
+                        session.paused = true;
+                        updateGenerationTitle();
                     }
                     await new Promise(resolve => setTimeout(resolve, 250));
                     continue;
@@ -959,6 +969,8 @@
                     session.pausedMs = (session.pausedMs || 0) + Date.now() - pausedAt;
                     pausedAt = null;
                     status.textContent = previousStatus;
+                    session.paused = false;
+                    updateGenerationTitle();
                 }
                 const result = predicate();
                 if (result) return result;
