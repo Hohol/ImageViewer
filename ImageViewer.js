@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.46
+// @version      2.47
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -4549,8 +4549,9 @@
             for (let parent = btn.parentElement; parent; parent = parent.parentElement) {
                 if (parent.hidden || parent.style?.display === 'none') return false;
             }
-            // Video slides can render only an image thumbnail, with a duration badge.
-            return !!btn.querySelector('video') || Array.from(btn.querySelectorAll('span')).some((span) =>
+            // Image-only video thumbnails use a duration badge or the legacy camera icon.
+            return !!btn.querySelector('video') || !!btn.querySelector('svg g[id="name=video-cam-fill"]') ||
+                Array.from(btn.querySelectorAll('span')).some((span) =>
                 /^(?:\d+:)?\d+:\d{2}$/.test(span.textContent.trim()));
         });
     }

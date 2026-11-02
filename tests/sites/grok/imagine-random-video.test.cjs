@@ -50,6 +50,31 @@ function setup(localStorage, sessionStorage) {
     removeStrip: () => { stripPresent = false; } };
 }
 
+test('legacy camera-icon previews participate in A/D and random video navigation', () => {
+  const h = setup();
+  // Legacy markup has an img and <svg><g id="name=video-cam-fill">,
+  // with neither a video element nor duration text inside the button.
+  for (const btn of h.buttons.slice(1)) {
+    btn.querySelector = selector => selector === 'svg g[id="name=video-cam-fill"]' ? {} : null;
+    btn.querySelectorAll = () => [{ textContent: '' }];
+  }
+  h.press({ code: 'KeyD', key: 'd' });
+  assert.deepEqual(h.clicks, ['second']);
+  assert.equal(h.toasts.at(-1).message, '2/3');
+  h.press({ code: 'KeyA', key: 'a' });
+  assert.equal(h.clicks.at(-1), 'first');
+  vm.runInContext('Math.random = () => 0', h.context);
+  h.press();
+  assert.equal(h.clicks.at(-1), 'second');
+  h.press({ key: 'r' });
+  assert.equal(h.clicks.at(-1), 'first');
+  h.press({ key: 'r' });
+  assert.equal(h.clicks.at(-1), 'third');
+  h.press({ key: 'r' });
+  assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
+  assert.ok(!h.clicks.includes('image'), 'ordinary image thumbnails remain excluded');
+});
+
 test('Saved blocks arrival autofocus but permits search-triggered focus without clicking the prompt', () => {
   const h = setup();
   const events = {};
