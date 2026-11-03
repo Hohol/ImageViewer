@@ -1233,16 +1233,11 @@
             if (run && item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
                 item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
         }, true);
-        document.addEventListener('input', (event) => {
-            if (typeof overlay !== 'undefined' && overlay?.contains(event.target)) return;
-            if (run && !automaticClick && event.isTrusted && !panel.contains(event.target)) finish('Stopped after manual input');
-        }, true);
         document.addEventListener('keydown', (event) => {
             if (!event.isTrusted || event.key !== 'Enter' || event.isComposing || event.shiftKey || panel.contains(event.target) ||
                 !event.target.closest?.('[contenteditable="true"], textarea')) return;
             const scope = event.target.closest(turnSelector) || (composer()?.contains(event.target) ? composer() : null);
             if (Array.from(scope?.querySelectorAll('button') || []).some(isPromptSend)) manualSubmission(event.target);
-            else if (run) finish('Stopped after manual input');
         }, true);
         let previousLayoutDebug = '';
         const refresh = () => {

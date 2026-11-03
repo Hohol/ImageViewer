@@ -41,7 +41,7 @@ test('gallery clicks preserve automation, while normal message controls still st
     imageFromEventTarget: target => target.image, isPromptSend: () => false, run: {}, turnSelector: '[data-turn-key]',
     finish: () => { stopped++; } });
   const start = controls.indexOf("        document.addEventListener('click', (event)");
-  vm.runInContext(controls.slice(start, controls.indexOf("        document.addEventListener('input'", start)), c);
+  vm.runInContext(controls.slice(start, controls.indexOf("        document.addEventListener('keydown'", start)), c);
   const button = { closest: () => ({}), getAttribute: () => '', matches: () => false };
   handler({ isTrusted: true, button: 0, target: { image: true, closest: () => button } });
   handler({ isTrusted: true, button: 0, target: { overlay: true } });
