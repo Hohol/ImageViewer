@@ -688,7 +688,7 @@
     // of those DOM nodes and own the blob URLs so unmounting cannot revoke our images.
     // ChatGPT drawing controls, generation notifications, and optional debug export.
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
-    const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
+    const CHATGPT_SHOW_DEBUG_LOG = true; // Show the downloadable debug log button.
     function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
         if (!isChatGPTHost()) return null;
         const turnSelector = '[data-turn-key]';
@@ -751,9 +751,16 @@
         let destroyed = false;
         let submissionTick = false;
         let submissionScope = null;
-        const timeline = () => document.querySelector('[data-app-action-timeline-scroll]');
-        const identity = () => location.pathname + '|' +
-            (document.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') || '');
+        // SPA navigation retains hidden copies of previous chats in the DOM.
+        const visibleChatElement = (selector, contentSelector) => Array.from(document.querySelectorAll(selector)).find(element => {
+            // Composer wrappers use display:contents and have no layout box.
+            const rect = (contentSelector ? element.querySelector(contentSelector) : element)?.getBoundingClientRect();
+            return rect && rect.width > 0 && rect.height > 0;
+        });
+        const timeline = () => visibleChatElement('[data-app-action-timeline-scroll]');
+        const composer = () => visibleChatElement('[data-map-composer-conversation]', 'form[data-chatgpt-composer]');
+        const identity = () => composer()?.getAttribute('data-map-composer-conversation') ||
+            location.pathname.match(/\/c\/([^/]+)/)?.[1] || location.pathname;
         const latest = () => Array.from(timeline()?.querySelectorAll(turnSelector) || []).at(-1);
         const distanceFromLatest = (root) => Math.max(0,
             getComputedStyle(root).flexDirection === 'column-reverse'
@@ -776,7 +783,6 @@
         const key = (turn) => turn?.getAttribute('data-turn-key');
         const state = (turn) => turn?.querySelector('[data-talvt-turn-state]')?.getAttribute('data-talvt-turn-state');
         const stopSelector = 'button[aria-label="Stop"], button[data-testid="stop-button"]';
-        const composer = () => document.querySelector('[data-map-composer-conversation]');
         // After edit/send, ChatGPT can leave the turn marked complete for several
         // seconds even though the composer already exposes its Stop control.
         const busy = (turn) => state(turn) === 'in_progress' ||
@@ -926,7 +932,10 @@
         }
         function check(session) {
             if (run !== session) throw new Error('cancelled');
-            if (identity() !== session.conversation) throw new Error('Chat changed');
+            if (identity() !== session.conversation) {
+                debugLog('chat-changed', { expected: session.conversation, actual: identity(), source: 'session-check' });
+                throw new Error('Chat changed');
+            }
         }
         const sessionTime = session => Date.now() - (session.pausedMs || 0);
         function targetMounted(session) {
@@ -1235,10 +1244,30 @@
             if (Array.from(scope?.querySelectorAll('button') || []).some(isPromptSend)) manualSubmission(event.target);
             else if (run) finish('Stopped after manual input');
         }, true);
+        let previousLayoutDebug = '';
         const refresh = () => {
             checkGenerationSound();
-            if (run && identity() !== run.conversation) finish('Chat changed');
+            if (run && identity() !== run.conversation) {
+                debugLog('chat-changed', { expected: run.conversation, actual: identity(), source: 'refresh' });
+                finish('Chat changed');
+            }
             const host = composer()?.querySelector('form[data-chatgpt-composer]');
+            const bounds = host?.getBoundingClientRect();
+            const layoutDebug = {
+                conversation: identity(), active: !!run, expected: run?.conversation,
+                hostChanged: host !== layoutHost, hostConnected: !!host?.isConnected,
+                timelinePresent: !!timeline(), styleConnected: layoutStyle.isConnected,
+                composerCount: document.querySelectorAll('[data-map-composer-conversation]').length,
+                hostBounds: bounds ? { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom,
+                    width: bounds.width, height: bounds.height } : null,
+                panelParent: panel.parentElement === document.body ? 'body' : panel.parentElement === host ? 'composer' : 'other',
+                panelPosition: getComputedStyle(panel).position,
+            };
+            const signature = JSON.stringify(layoutDebug);
+            if (signature !== previousLayoutDebug) {
+                previousLayoutDebug = signature;
+                debugLog('controls-layout', layoutDebug);
+            }
             if (host !== layoutHost) {
                 if (layoutHost) {
                     layoutObserver.unobserve(layoutHost);
@@ -1247,9 +1276,9 @@
                 layoutHost = host;
                 if (host) layoutObserver.observe(host);
             }
-            panel.hidden = !timeline() || !host;
+            panel.hidden = !timeline() || !host || !bounds.width || !bounds.height;
             panel.style.display = panel.hidden ? 'none' : 'grid';
-            if (!host) return;
+            if (panel.hidden) return;
             // Use only the space outside the original composer, never its width.
             const side = document.documentElement.clientWidth - host.getBoundingClientRect().right >= 244;
             host.classList.toggle('iv-retry-side', side);
