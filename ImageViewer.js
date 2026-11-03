@@ -688,7 +688,7 @@
     // of those DOM nodes and own the blob URLs so unmounting cannot revoke our images.
     // ChatGPT drawing controls, generation notifications, and optional debug export.
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
-    const CHATGPT_SHOW_DEBUG_LOG = true; // Show the downloadable debug log button.
+    const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
     function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
         if (!isChatGPTHost()) return null;
         const turnSelector = '[data-turn-key]';
