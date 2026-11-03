@@ -396,6 +396,36 @@ test('empty J-opened posts jump again, evict deleted URLs, and fall back to Save
   assert.equal(destinations.at(-1), '/imagine/saved');
 });
 
+test('J origin survives native thumbnail and deletion-driven URL changes without A/D/R', () => {
+  for (const mode of ['native', 'after-deletion']) {
+    const h = setup();
+    vm.runInContext(`grokJumpEntryPath = grokJumpCurrentPath = location.pathname;
+      imagineFilmstripMediaIds.clear();
+      grokSavedPostUrls.add('https://grok.com/imagine/post/example');
+      grokSavedPostUrls.add('https://grok.com/imagine/post/next');`, h.context);
+    const destinations = [];
+    h.context.location.assign = url => destinations.push(url);
+    h.context.history.back = () => assert.fail('must continue J navigation');
+    if (mode === 'native') {
+      h.context.history.replaceState({}, '', '/imagine/post/second');
+    } else {
+      // Initial observer pass records IDs; deleting the selected first clip selects second.
+      h.context.syncImagineSelectionAfterDeletion();
+      const second = h.buttons[2];
+      second.click = () => {
+        h.select(second);
+        h.context.history.replaceState({}, '', '/imagine/post/second');
+      };
+      h.buttons.splice(1, 1);
+      h.context.syncImagineSelectionAfterDeletion();
+    }
+    assert.equal(h.context.location.pathname, '/imagine/post/second');
+    h.buttons.splice(0); // Delete-all can empty the DOM before its final navigation.
+    h.context.leaveEmptyImaginePost(['first', 'second', 'third']);
+    assert.deepEqual(destinations, ['https://grok.com/imagine/post/next'], mode);
+  }
+});
+
 test('ordinary entries retain back navigation and leaving a J post clears its origin', () => {
   const h = setup();
   let back = 0;

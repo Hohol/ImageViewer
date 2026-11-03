@@ -4546,6 +4546,18 @@
     const imagineFilmstripMediaIds = new Set();
     let imagineVisitedPage = location.pathname;
 
+    function rememberImagineFilmstripMediaIds() {
+        const strip = isGrokImaginePage() && imaginePostFilmstripScrollEl();
+        if (!strip) return;
+        for (const btn of strip.querySelectorAll('button[data-filmstrip-item="true"]')) {
+            const id = imaginePostIdFromFilmstripButton(btn);
+            if (id) imagineFilmstripMediaIds.add(id);
+        }
+        // The entry URL can name the parent post rather than a filmstrip item.
+        const postId = location.pathname.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
+        if (postId) imagineFilmstripMediaIds.add(postId);
+    }
+
     function resetImagineVisitedVideos() {
         imagineVisitedVideos.clear();
         imagineFilmstripMediaIds.clear();
@@ -4571,10 +4583,13 @@
 
     function bindImagineVisitedPageLifecycle() {
         if (!isGrokHost()) return;
+        rememberImagineFilmstripMediaIds();
         // Grok changes routes without unloading the document.
         for (const method of ['pushState', 'replaceState']) {
             const original = history[method];
             history[method] = function (...args) {
+                // Capture before Grok changes the URL, including native thumbnail clicks.
+                rememberImagineFilmstripMediaIds();
                 const result = original.apply(this, args);
                 syncImagineVisitedPage();
                 return result;
@@ -4622,10 +4637,7 @@
         const allButtons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]'));
         // Keep removed IDs until page leave: Grok may update the deleted current
         // post's URL only after the filmstrip has already changed.
-        for (const btn of allButtons) {
-            const id = imaginePostIdFromFilmstripButton(btn);
-            if (id) imagineFilmstripMediaIds.add(id);
-        }
+        rememberImagineFilmstripMediaIds();
         const buttons = collectImagineVideoButtons(allButtons);
         const selected = getImaginePostSelectedFilmstripButton();
         let target;
@@ -4657,6 +4669,8 @@
     let imagineDeletionSelection = null;
 
     function syncImagineSelectionAfterDeletion() {
+        // Retain IDs before cards disappear, without requiring a navigation hotkey.
+        rememberImagineFilmstripMediaIds();
         const strip = isGrokImaginePage() && imaginePostFilmstripScrollEl();
         if (!strip) {
             imagineDeletionSelection = null;
