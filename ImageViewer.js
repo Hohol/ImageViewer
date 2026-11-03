@@ -1127,9 +1127,16 @@
                     const turn = latest();
                     if (!turn || state(turn) !== 'complete' || busy(turn)) { completedAt = 0; return false; }
                     if (turn.querySelector(editorSelector)) throw new Error('Finish editing the message first');
+                    const generated = images(turn);
+                    if (generated.some(img => img.complete && img.naturalWidth > 0)) return true;
+                    if (generated.some(img => !img.complete)) return false;
                     if (!completedAt) completedAt = sessionTime(session);
                     return sessionTime(session) - completedAt >= 2000;
                 }, 15 * 60 * 1000, 'Response timed out; autosend stopped');
+                if (images(latest()).some(img => img.complete && img.naturalWidth > 0)) {
+                    finish('Image generated (0 retries)');
+                    return;
+                }
                 const input = composer()?.querySelector('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="Ask ChatGPT"], textarea');
                 if (!input) throw new Error('Prompt field is unavailable');
                 check(session);
