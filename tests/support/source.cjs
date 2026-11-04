@@ -8,6 +8,7 @@ const sections = {
   'shared/viewer/local-hotkeys': ['        let help = null;', "        window.addEventListener('hashchange'"],
   'shared/viewer/local-images': ['    function localImageName(', '    function initLocalImageViewer()'],
   'grok/imagine-random-video': [
+    ['    function repairGrokSavedLinksAfterDeletion(', '    function hideImaginePostDomForDeletedMediaId('],
     ['    function isGrokImagineSavedPage()', '    /** Keep/Unkeep buttons'],
     ['    function pickRandomIndex(', '    function cancelImageNavigationSearch('],
     ['    function imaginePostFilmstripScrollEl()', '    function imaginePostIdFromFilmstripButton('],

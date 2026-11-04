@@ -22,6 +22,32 @@
 (function() {
     'use strict';
 
+    // Observe the explicit missing-post response before Grok's router redirects.
+    let grokMissingPostHandler = null;
+    const grokMissingPostQueue = [];
+    if (/(^|\.)grok\.com$/.test(location.hostname)) {
+        const originalFetch = window.fetch;
+        window.fetch = function (...args) {
+            let isPostRequest = false;
+            try {
+                const input = args[0];
+                const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
+                isPostRequest = url.origin === location.origin && url.pathname === '/rest/media/post/get';
+            } catch (_) {}
+            const postPath = location.pathname;
+            const result = originalFetch.apply(this, args);
+            if (isPostRequest) void result.then((response) => {
+                if (response.status !== 404) return;
+                return response.clone().json().then((body) => {
+                    if (body.code !== 5 || body.message !== 'Media post not found') return;
+                    if (grokMissingPostHandler) grokMissingPostHandler(postPath);
+                    else grokMissingPostQueue.push(postPath);
+                });
+            }).catch(() => {});
+            return result;
+        };
+    }
+
     // Reserve capture priority at document-start, before Grok's type-to-focus
     // listener. DOM-dependent handlers are connected only after init completes.
     let viewerKeydownHandler = null;
@@ -3925,14 +3951,43 @@
     }
 
     const GROK_JUMP_ENTRY_KEY = 'ivGrokJumpEntry';
+    const GROK_JUMP_RETRY_KEY = 'ivGrokJumpRetries';
+    let grokJumpAttemptPath = null;
+    let grokJumpAttemptTime = 0;
     let grokJumpEntryPath = null;
     let grokJumpCurrentPath = null;
     if (isGrokHost()) {
         try {
             const entry = sessionStorage.getItem(GROK_JUMP_ENTRY_KEY);
             sessionStorage.removeItem(GROK_JUMP_ENTRY_KEY);
-            if (entry === location.pathname) grokJumpEntryPath = grokJumpCurrentPath = entry;
+            if (entry === location.pathname) {
+                grokJumpEntryPath = grokJumpCurrentPath = grokJumpAttemptPath = entry;
+                grokJumpAttemptTime = Date.now();
+            }
         } catch (_) {}
+    }
+
+    function handleMissingGrokJumpPost(postPath) {
+        if (postPath !== grokJumpAttemptPath || Date.now() - grokJumpAttemptTime > 30000 ||
+            (location.pathname !== postPath && location.pathname !== '/imagine')) return;
+        grokJumpAttemptPath = null; // Ignore duplicate failures for this attempt.
+        for (const href of grokSavedPostUrls) {
+            if (new URL(href, location.origin).pathname.replace(/\/$/, '') === postPath.replace(/\/$/, '')) {
+                grokSavedPostUrls.delete(href);
+            }
+        }
+        try { localStorage.setItem(GROK_SAVED_POST_CACHE_KEY, JSON.stringify(Array.from(grokSavedPostUrls))); } catch (_) {}
+        let retries = 0;
+        try { retries = Number(sessionStorage.getItem(GROK_JUMP_RETRY_KEY)) || 0; } catch (_) {}
+        if (retries >= 5) {
+            showViewerToast('Stopped after 5 missing posts. Press J to try again.', 5000);
+            return;
+        }
+        try { sessionStorage.setItem(GROK_JUMP_RETRY_KEY, String(retries + 1)); } catch (_) {}
+        if (!openRandomGrokSavedPost(true)) {
+            showViewerToast('No cached posts remaining', 5000);
+            navigateGrokBackToSaved();
+        }
     }
 
     function leaveEmptyImaginePost(deletedIds = []) {
@@ -3950,7 +4005,10 @@
         if (!openRandomGrokSavedPost()) navigateGrokBackToSaved();
     }
 
-    function openRandomGrokSavedPost() {
+    function openRandomGrokSavedPost(automaticRetry = false) {
+        if (!automaticRetry) {
+            try { sessionStorage.removeItem(GROK_JUMP_RETRY_KEY); } catch (_) {}
+        }
         const mounted = captureGrokSavedPosts();
         const currentPath = location.pathname.replace(/\/$/, '');
         const urls = Array.from(grokSavedPostUrls).filter((href) =>
@@ -3958,6 +4016,8 @@
         if (!urls.length) return false;
         const url = urls[pickRandomIndex(urls.length, -1)];
         grokJumpEntryPath = grokJumpCurrentPath = new URL(url, location.origin).pathname;
+        grokJumpAttemptPath = grokJumpEntryPath;
+        grokJumpAttemptTime = Date.now();
         try { sessionStorage.setItem(GROK_JUMP_ENTRY_KEY, grokJumpEntryPath); } catch (_) {}
         rememberGrokJumpSound(url);
         const link = mounted.get(url);
@@ -4562,6 +4622,7 @@
     const imagineVisitedVideos = new Set();
     const imagineFilmstripMediaIds = new Set();
     let imagineVisitedPage = location.pathname;
+    let imagineVisitedConversation = new URLSearchParams(location.search || '').get('conversation');
 
     function rememberImagineFilmstripMediaIds() {
         const strip = isGrokImaginePage() && imaginePostFilmstripScrollEl();
@@ -4582,19 +4643,27 @@
         imagineVisitedVideos.clear();
         imagineFilmstripMediaIds.clear();
         imagineVisitedPage = location.pathname;
+        imagineVisitedConversation = new URLSearchParams(location.search || '').get('conversation');
     }
 
     function syncImagineVisitedPage() {
-        if (imagineVisitedPage === location.pathname) return;
+        const conversation = new URLSearchParams(location.search || '').get('conversation');
+        if (imagineVisitedPage === location.pathname && imagineVisitedConversation === conversation) return;
         const previousPost = imagineVisitedPage.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
         const nextPost = location.pathname.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
         // Grok replaces the post URL for each selection within the same filmstrip.
-        if (previousPost && nextPost && imagineFilmstripMediaIds.has(previousPost) && imagineFilmstripMediaIds.has(nextPost)) {
+        const sameConversation = !!conversation && conversation === imagineVisitedConversation;
+        if (previousPost && nextPost && (sameConversation ||
+            (!conversation && !imagineVisitedConversation && imagineFilmstripMediaIds.has(previousPost) && imagineFilmstripMediaIds.has(nextPost)))) {
             if (grokJumpCurrentPath === imagineVisitedPage) grokJumpCurrentPath = location.pathname;
             imagineVisitedPage = location.pathname;
+            imagineVisitedConversation = conversation;
             return;
         }
-        if (grokJumpCurrentPath !== location.pathname) {
+        // Keep a newly started jump's marker while the old page finishes redirecting.
+        if ((grokJumpCurrentPath !== location.pathname &&
+            (!grokJumpCurrentPath || grokJumpCurrentPath === imagineVisitedPage)) ||
+            (imagineVisitedPage === location.pathname && imagineVisitedConversation !== conversation)) {
             grokJumpEntryPath = grokJumpCurrentPath = null;
             try { sessionStorage.removeItem(GROK_JUMP_ENTRY_KEY); } catch (_) {}
         }
@@ -4803,8 +4872,35 @@
         return getImaginePostHeroImageMediaId(root);
     }
 
+    function repairGrokSavedLinksAfterDeletion(deletedIds) {
+        const deleted = new Set(deletedIds.map(id => String(id).toLowerCase()));
+        const strip = imaginePostFilmstripScrollEl();
+        const buttons = strip ? Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]')) : [];
+        const survivors = buttons.filter(btn => !btn.hidden && btn.style.display !== 'none' &&
+            !btn.closest('[hidden], [style*="display: none"]')).map(imaginePostIdFromFilmstripButton)
+            .filter(id => id && !deleted.has(id.toLowerCase()));
+        const selected = imaginePostIdFromFilmstripButton(getImaginePostSelectedFilmstripButton());
+        const replacement = survivors.includes(selected) ? selected : survivors[0];
+        let changed = false;
+        for (const href of Array.from(grokSavedPostUrls)) {
+            const url = new URL(href, location.origin);
+            const id = url.pathname.match(/^\/imagine\/post\/([^/]+)\/?$/)?.[1];
+            if (!id || !deleted.has(id.toLowerCase())) continue;
+            grokSavedPostUrls.delete(href);
+            if (replacement) {
+                url.pathname = '/imagine/post/' + replacement;
+                grokSavedPostUrls.add(url.href);
+            }
+            changed = true;
+        }
+        if (changed) {
+            try { localStorage.setItem(GROK_SAVED_POST_CACHE_KEY, JSON.stringify(Array.from(grokSavedPostUrls))); } catch (_) {}
+        }
+    }
+
     function hideImaginePostDomForDeletedMediaId(root, mediaId, updateSelection = true) {
         if (!mediaId) return;
+        if (updateSelection) repairGrokSavedLinksAfterDeletion([mediaId]);
         if (updateSelection) syncImagineSelectionAfterDeletion();
         const norm = String(mediaId).toLowerCase();
         const hideEl = (el) => {
@@ -5487,6 +5583,7 @@
                 }
                 if (deletedOk.length) {
                     grokRecentlyDeletedAddIds(deletedOk);
+                    repairGrokSavedLinksAfterDeletion(deletedOk);
                     scheduleGrokImagineSavedKeepSync();
                     syncImagineSelectionAfterDeletion();
                     for (const id of deletedOk) hideImaginePostDomForDeletedMediaId(root, id, false);
@@ -5591,6 +5688,7 @@
                     }
                     if (deletedOk.length) {
                         grokRecentlyDeletedAddIds(deletedOk);
+                        repairGrokSavedLinksAfterDeletion(deletedOk);
                         scheduleGrokImagineSavedKeepSync();
                         syncImagineSelectionAfterDeletion();
                         for (let k = 0; k < deletedOk.length; k++) {
@@ -6107,6 +6205,8 @@
     }
 
     bindImagineVisitedPageLifecycle();
+    grokMissingPostHandler = handleMissingGrokJumpPost;
+    for (const path of grokMissingPostQueue.splice(0)) handleMissingGrokJumpPost(path);
     bindGrokSavedComposerFocus();
     bindGrokJumpSound();
     window.addEventListener('click', handleGrokPostBack, true);

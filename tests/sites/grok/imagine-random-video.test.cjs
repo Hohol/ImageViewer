@@ -9,7 +9,7 @@ function setup(localStorage, sessionStorage) {
   const toasts = [];
   const listeners = {};
   const button = (name, duration, video = false) => ({
-    name, style: {},
+    name, style: {}, closest: () => null,
     querySelector: selector => selector === 'video' && video ? {} : null,
     querySelectorAll: () => duration ? [{ textContent: duration }] : [],
     click() { clicks.push(name); selected = this; },
@@ -19,7 +19,7 @@ function setup(localStorage, sessionStorage) {
   const strip = { querySelectorAll: () => buttons, querySelector: () => buttons.includes(selected) ? selected : null };
   const context = {
     location: { pathname: '/imagine/post/example', origin: 'https://grok.com' }, isGrokHost: () => true,
-    URL, localStorage, sessionStorage,
+    URL, URLSearchParams, localStorage, sessionStorage,
     pickBestVisibleVideo: () => null,
     document: { querySelector: () => stripPresent ? strip : null, querySelectorAll: () => [] },
     overlay: null, ivChatGPTGallery: null,
@@ -30,8 +30,8 @@ function setup(localStorage, sessionStorage) {
     imaginePostIdFromFilmstripButton: btn => btn?.name || null,
     window: { addEventListener: (name, fn) => { listeners[name] = fn; } },
     history: {
-      pushState: (_state, _title, path) => { context.location.pathname = path; },
-      replaceState: (_state, _title, path) => { context.location.pathname = path; },
+      pushState: (_state, _title, path) => { const url = new URL(path, context.location.origin); context.location.pathname = url.pathname; context.location.search = url.search; },
+      replaceState: (_state, _title, path) => { const url = new URL(path, context.location.origin); context.location.pathname = url.pathname; context.location.search = url.search; },
     },
     navigateToRandomImage: () => { imageCalls++; return true; },
   };
@@ -474,6 +474,73 @@ test('J origin survives native thumbnail and deletion-driven URL changes without
     h.context.leaveEmptyImaginePost(['first', 'second', 'third']);
     assert.deepEqual(destinations, ['https://grok.com/imagine/post/next'], mode);
   }
+});
+
+test('confirmed missing J targets are evicted and retried once despite late router redirects', () => {
+  const data = new Map([['ivGrokJumpEntry', '/imagine/post/example']]);
+  const storage = { getItem: key => data.get(key) || null,
+    setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+  const h = setup(storage, storage);
+  const opened = [];
+  h.context.location.assign = url => opened.push(url);
+  vm.runInContext(`grokSavedPostUrls.add('https://grok.com/imagine/post/example?conversation=a');
+    grokSavedPostUrls.add('https://grok.com/imagine/post/example?conversation=b');
+    grokSavedPostUrls.add('https://grok.com/imagine/post/survivor');`, h.context);
+  h.context.handleMissingGrokJumpPost('/imagine/post/unrelated');
+  assert.equal(opened.length, 0);
+  h.context.handleMissingGrokJumpPost('/imagine/post/example');
+  assert.deepEqual(opened, ['https://grok.com/imagine/post/survivor']);
+  assert.equal(vm.runInContext('grokSavedPostUrls.size', h.context), 1);
+  h.context.handleMissingGrokJumpPost('/imagine/post/example');
+  assert.equal(opened.length, 1, 'duplicate response cannot jump twice');
+  h.context.history.pushState({}, '', '/imagine');
+  assert.equal(data.get('ivGrokJumpEntry'), '/imagine/post/survivor', 'late redirect keeps next jump marker');
+  assert.equal(data.get('ivGrokJumpRetries'), '1');
+});
+
+test('missing-post retries stop at the limit and handle a response arriving after redirect', () => {
+  for (const retries of [0, 5]) {
+    const data = new Map([['ivGrokJumpEntry', '/imagine/post/example'], ['ivGrokJumpRetries', String(retries)]]);
+    const storage = { getItem: key => data.get(key) || null,
+      setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+    const h = setup(storage, storage);
+    const opened = [];
+    h.context.location.assign = url => opened.push(url);
+    vm.runInContext("grokSavedPostUrls.add('https://grok.com/imagine/post/other')", h.context);
+    h.context.history.pushState({}, '', '/imagine');
+    h.context.handleMissingGrokJumpPost('/imagine/post/example');
+    assert.equal(opened.length, retries === 5 ? 0 : 1);
+    if (retries === 5) assert.match(h.toasts.at(-1).message, /Stopped after 5/);
+  }
+});
+
+test('cached links migrate to survivors with conversation and other parameters intact', () => {
+  const h = setup();
+  h.buttons[0].hidden = true;
+  vm.runInContext(`grokSavedPostUrls.add('https://grok.com/imagine/post/first?conversation=group&extra=keep');
+    grokSavedPostUrls.add('https://grok.com/imagine/post/unrelated?conversation=other');`, h.context);
+  h.context.repairGrokSavedLinksAfterDeletion(['first', 'second']);
+  let urls = vm.runInContext('Array.from(grokSavedPostUrls).join("\\n")', h.context);
+  assert.match(urls, /post\/third\?conversation=group&extra=keep/);
+  assert.match(urls, /post\/unrelated\?conversation=other/);
+  assert.doesNotMatch(urls, /post\/(first|second)/);
+  h.context.repairGrokSavedLinksAfterDeletion(['first', 'second', 'third']);
+  urls = vm.runInContext('Array.from(grokSavedPostUrls).join("\\n")', h.context);
+  assert.equal(urls, 'https://grok.com/imagine/post/unrelated?conversation=other');
+});
+
+test('J origin survives unidentified items in the same conversation but clears on a different conversation', () => {
+  const h = setup();
+  h.context.history.replaceState({}, '', '/imagine/post/example?conversation=group');
+  vm.runInContext('grokJumpEntryPath = grokJumpCurrentPath = location.pathname', h.context);
+  h.context.history.replaceState({}, '', '/imagine/post/unidentified-image?conversation=group');
+  assert.equal(vm.runInContext('grokJumpCurrentPath', h.context), '/imagine/post/unidentified-image');
+  h.context.history.replaceState({}, '', '/imagine/post/first?conversation=group');
+  assert.equal(vm.runInContext('grokJumpEntryPath', h.context), '/imagine/post/example');
+  assert.equal(vm.runInContext('grokJumpCurrentPath', h.context), '/imagine/post/first');
+  h.context.history.replaceState({}, '', '/imagine/post/first?conversation=different');
+  // Same media path in another conversation must not retain the previous J origin.
+  assert.equal(vm.runInContext('grokJumpEntryPath', h.context), null);
 });
 
 test('ordinary entries retain back navigation and leaving a J post clears its origin', () => {

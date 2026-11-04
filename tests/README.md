@@ -156,3 +156,5 @@ establish background support.
 Private snapshots and console logs stay in ignored `temp/`. Keep committed
 fixtures synthetic. Add regression coverage where a bug belongs, and update the
 coverage table when introducing tests for another feature or site.
+
+Cached Imagine links are repaired after successful single/bulk deletions using surviving filmstrip items, preserving conversation/query parameters. Regression checks also cover unidentified items within the same conversation and clearing J origin on a conversation change.
