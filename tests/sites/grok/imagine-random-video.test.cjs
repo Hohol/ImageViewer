@@ -365,6 +365,56 @@ test('deleting the selected video advances next, falls back previous, and skips 
   }
 });
 
+test('deletion follows the last navigation hotkey, including attempts at an end', () => {
+  for (const [event, start, expected] of [
+    [{ code: 'KeyD' }, 'first', 'third'],
+    [{ code: 'KeyA' }, 'third', 'first'],
+    [{ code: 'KeyA' }, 'first', 'second'],
+    [{ code: 'KeyD' }, 'third', 'second'],
+    [{ key: 'R' }, 'first', 'third'],
+  ]) {
+    const h = setup();
+    vm.runInContext('Math.random = () => 0', h.context);
+    h.select(h.buttons.find(btn => btn.name === start));
+    h.press(event);
+    const deleted = h.clicks.at(-1) || start;
+    h.context.syncImagineSelectionAfterDeletion();
+    h.buttons.splice(h.buttons.findIndex(btn => btn.name === deleted), 1);
+    // Make random selection choose the last survivor, distinct from next routing.
+    vm.runInContext('Math.random = () => 0.99', h.context);
+    h.context.syncImagineSelectionAfterDeletion();
+    assert.equal(h.clicks.at(-1), expected, JSON.stringify(event) + ' from ' + start);
+  }
+});
+
+test('lowercase r deletion selects unvisited survivors and preserves exhaustion', () => {
+  const h = setup();
+  vm.runInContext('Math.random = () => 0', h.context);
+  h.press({ key: 'r' });
+  assert.equal(h.clicks.at(-1), 'second');
+  h.context.syncImagineSelectionAfterDeletion();
+  h.buttons.splice(2, 1);
+  h.context.syncImagineSelectionAfterDeletion();
+  assert.equal(h.clicks.at(-1), 'third');
+  assert.equal(h.visited(), 'first,second,third');
+  h.buttons.pop();
+  h.context.syncImagineSelectionAfterDeletion();
+  assert.equal(h.clicks.length, 2);
+  assert.equal(h.toasts.at(-1).message, 'No more unvisited videos');
+});
+
+test('leaving the filmstrip resets deletion navigation to next', () => {
+  const h = setup();
+  h.press({ code: 'KeyA' });
+  h.context.history.pushState({}, '', '/imagine/saved');
+  h.context.history.pushState({}, '', '/imagine/post/example');
+  h.select(h.buttons[2]);
+  h.context.syncImagineSelectionAfterDeletion();
+  h.buttons.splice(2, 1);
+  h.context.syncImagineSelectionAfterDeletion();
+  assert.equal(h.clicks.at(-1), 'third');
+});
+
 test('deletion tracking preserves selection for unselected deletions and unrelated page changes', () => {
   const h = setup();
   h.context.syncImagineSelectionAfterDeletion();

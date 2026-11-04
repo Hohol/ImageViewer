@@ -4559,7 +4559,10 @@
         if (postId) imagineFilmstripMediaIds.add(postId);
     }
 
+    let imagineDeletionNavigation = { direction: 1, unvisitedOnly: false };
+
     function resetImagineVisitedVideos() {
+        imagineDeletionNavigation = { direction: 1, unvisitedOnly: false };
         imagineVisitedVideos.clear();
         imagineFilmstripMediaIds.clear();
         imagineVisitedPage = location.pathname;
@@ -4633,6 +4636,7 @@
 
     function navigateImagineVideo(direction = 0, unvisitedOnly = false) {
         syncImagineVisitedPage();
+        imagineDeletionNavigation = { direction, unvisitedOnly };
         const strip = imaginePostFilmstripScrollEl();
         if (!strip) return false;
         const allButtons = Array.from(strip.querySelectorAll('button[data-filmstrip-item="true"]'));
@@ -4688,11 +4692,22 @@
         if (previous.path !== location.pathname && !previous.ids.includes(routeId)) return;
         const index = previous.ids.indexOf(previous.selected);
         if (index < 0) return;
-        const nextId = previous.ids.slice(index + 1).find((id) => byId.has(id)) ||
-            previous.ids.slice(0, index).reverse().find((id) => byId.has(id));
-        const target = byId.get(nextId);
+        const { direction, unvisitedOnly } = imagineDeletionNavigation;
+        let target;
+        if (!direction) {
+            const candidates = buttons.filter((btn) => !unvisitedOnly || !imagineVisitedVideos.has(imagineVideoVisitKey(btn)));
+            target = candidates[pickRandomIndex(candidates.length, -1)];
+            if (!target && unvisitedOnly) showViewerToast('No more unvisited videos', 1000);
+            if (target && unvisitedOnly) imagineVisitedVideos.add(imagineVideoVisitKey(target));
+        } else {
+            const before = previous.ids.slice(0, index).reverse();
+            const after = previous.ids.slice(index + 1);
+            const preferred = direction < 0 ? before : after;
+            const fallback = direction < 0 ? after : before;
+            target = byId.get(preferred.concat(fallback).find((id) => byId.has(id)));
+        }
         if (!target) return;
-        imagineDeletionSelection.selected = nextId;
+        imagineDeletionSelection.selected = imaginePostIdFromFilmstripButton(target);
         // Use Grok's normal selection so its hero/fullscreen player updates too.
         if (overlay) hideGallery();
         target.click();
