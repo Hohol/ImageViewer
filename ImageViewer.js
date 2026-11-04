@@ -1165,7 +1165,10 @@
                             throw new Error('Could not enter d in the prompt field');
                         }
                     }
-                } finally { automaticClick = false; }
+                } finally {
+                    input.blur();
+                    automaticClick = false;
+                }
                 const send = await waitFor(session, () => {
                     if ((input.value ?? input.textContent ?? '').trim() !== 'd') throw new Error('Prompt changed');
                     if (busy(latest())) throw new Error('Another generation started');
@@ -3043,12 +3046,20 @@
 
     function collectNavigableImages() {
         const cached = ivChatGPTGallery?.images();
-        if (cached) return cached;
+        if (cached && (cached.length || !ivChatGPTGallery?.cacheOnly)) return cached;
         const allImgs = Array.from(document.querySelectorAll('img'));
         const seen = new Set();
         const list = [];
         for (const imgEl of allImgs) {
             if (overlay?.contains(imgEl) || isExcludedImage(imgEl)) continue;
+            if (ivChatGPTGallery?.cacheOnly) {
+                if (!imgEl.complete || !imgEl.naturalWidth) continue;
+                const rect = imgEl.getBoundingClientRect();
+                const style = getComputedStyle(imgEl);
+                if (style.visibility === 'hidden' || style.display === 'none' ||
+                    rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= window.innerHeight ||
+                    rect.right <= 0 || rect.left >= window.innerWidth) continue;
+            }
             const src = imgEl.src;
             if (!src || seen.has(src)) continue;
             seen.add(src);
@@ -3145,6 +3156,11 @@
         galleryInPage = false;
         
         imgs = collectNavigableImages();
+        // A directly selected live image can precede cache capture or stable
+        // message indexing. Opening it requires neither history nor scrolling.
+        if (ivChatGPTGallery?.cacheOnly && !imgs.length && img.isConnected && img.complete && img.naturalWidth > 0) {
+            imgs = [img];
+        }
         if (ivChatGPTGallery?.cacheOnly && !imgs.length) { showViewerToast('No cached or mounted images available yet'); return; }
         
         // Cached ChatGPT images have their own URLs; match their stable message/slot key.
