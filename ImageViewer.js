@@ -3904,6 +3904,20 @@
     // Local storage preserves loaded post URLs across tabs and browser sessions.
     const GROK_SAVED_POST_CACHE_KEY = 'ivGrokSavedPostUrls';
     const grokSavedPostUrls = new Set();
+    const grokSavedPostByGroup = new Map();
+
+    function cacheGrokSavedPost(href) {
+        const url = new URL(href, location.origin);
+        const conversation = url.searchParams.get('conversation');
+        const group = conversation ? 'conversation:' + conversation : 'post:' + url.pathname.replace(/\/$/, '');
+        const previous = grokSavedPostByGroup.get(group);
+        if (previous === url.href && grokSavedPostUrls.has(url.href)) return false;
+        if (previous) grokSavedPostUrls.delete(previous);
+        grokSavedPostByGroup.set(group, url.href);
+        grokSavedPostUrls.add(url.href);
+        return true;
+    }
+
     if (isGrokHost()) {
         try {
             const stored = JSON.parse(localStorage.getItem(GROK_SAVED_POST_CACHE_KEY) || '[]');
@@ -3913,10 +3927,12 @@
                     try {
                         const url = new URL(href, location.origin);
                         if (url.origin === location.origin && /^\/imagine\/post\/[^/]+\/?$/.test(url.pathname)) {
-                            grokSavedPostUrls.add(url.href);
+                            cacheGrokSavedPost(url.href);
                         }
                     } catch (_) {}
                 }
+                const normalized = JSON.stringify(Array.from(grokSavedPostUrls));
+                if (normalized !== JSON.stringify(stored)) localStorage.setItem(GROK_SAVED_POST_CACHE_KEY, normalized);
             }
         } catch (_) {}
     }
@@ -3933,10 +3949,7 @@
                 changed = grokSavedPostUrls.delete(link.href) || changed;
                 return;
             }
-            if (!grokSavedPostUrls.has(link.href)) {
-                grokSavedPostUrls.add(link.href);
-                changed = true;
-            }
+            changed = cacheGrokSavedPost(link.href) || changed;
             mounted.set(link.href, link);
         });
         if (changed) {
@@ -3945,6 +3958,28 @@
             } catch (_) {} // Keep the in-memory cache usable if storage is unavailable.
         }
         return mounted;
+    }
+
+    function syncGrokSavedCacheCheckmarks(mounted) {
+        const links = new Set(mounted.values());
+        document.querySelectorAll('[data-iv-grok-cached-check]').forEach((mark) => {
+            if (!links.has(mark.parentElement) || !grokSavedPostUrls.has(mark.parentElement.href)) mark.remove();
+        });
+        for (const [href, link] of mounted) {
+            if (!grokSavedPostUrls.has(href) || link.querySelector('[data-iv-grok-cached-check]')) continue;
+            const mark = document.createElement('span');
+            mark.dataset.ivGrokCachedCheck = '1';
+            mark.textContent = '✓';
+            mark.setAttribute('aria-hidden', 'true');
+            Object.assign(mark.style, {
+                position: 'absolute', left: '5px', bottom: '5px', zIndex: '2',
+                width: '16px', height: '16px', display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                color: '#4ade80', background: 'rgba(0,0,0,0.65)', borderRadius: '50%',
+                fontSize: '13px', fontWeight: '700', lineHeight: '1', pointerEvents: 'none',
+            });
+            link.appendChild(mark);
+        }
     }
 
     const GROK_JUMP_SOUND_KEY = 'ivGrokJumpSound';
@@ -3958,17 +3993,22 @@
         try { sessionStorage.setItem(GROK_JUMP_SOUND_KEY, JSON.stringify(grokJumpSound)); } catch (_) {}
     }
 
-    function restoreGrokJumpSound() {
-        if (!grokJumpSound || grokJumpSound.expires < Date.now() || location.pathname !== grokJumpSound.path) return;
-        const video = pickBestVisibleVideo();
-        if (!video) return;
-        const muted = grokJumpSound.muted;
+    function setGrokImagineMuteState(muted) {
+        if (!isGrokHost() || !isGrokImaginePage()) return;
         // Update Grok's own state too, so its next render does not mute us again.
         const label = muted ? 'Mute' : 'Unmute';
         const control = Array.from(document.querySelectorAll('button')).find((button) =>
             button.textContent.trim() === label && button.getClientRects().length &&
             getComputedStyle(button).visibility !== 'hidden');
         if (control) control.click();
+    }
+
+    function restoreGrokJumpSound() {
+        if (!grokJumpSound || grokJumpSound.expires < Date.now() || location.pathname !== grokJumpSound.path) return;
+        const video = pickBestVisibleVideo();
+        if (!video) return;
+        const muted = grokJumpSound.muted;
+        setGrokImagineMuteState(muted);
         if (video.muted !== muted) video.muted = muted;
     }
 
@@ -4059,8 +4099,12 @@
         }
         const mounted = captureGrokSavedPosts();
         const currentPath = location.pathname.replace(/\/$/, '');
-        const urls = Array.from(grokSavedPostUrls).filter((href) =>
-            new URL(href, location.origin).pathname.replace(/\/$/, '') !== currentPath);
+        const currentConversation = new URLSearchParams(location.search || '').get('conversation');
+        const urls = Array.from(grokSavedPostUrls).filter((href) => {
+            const url = new URL(href, location.origin);
+            return url.pathname.replace(/\/$/, '') !== currentPath &&
+                !(currentConversation && url.searchParams.get('conversation') === currentConversation);
+        });
         if (!urls.length) return false;
         const url = urls[pickRandomIndex(urls.length, -1)];
         grokJumpEntryPath = grokJumpCurrentPath = new URL(url, location.origin).pathname;
@@ -4278,7 +4322,7 @@
         requestAnimationFrame(() => {
             grokSavedKeepSyncScheduled = false;
             syncGrokImagineSavedKeepUi();
-            captureGrokSavedPosts();
+            syncGrokSavedCacheCheckmarks(captureGrokSavedPosts());
             syncGrokPostBackLink();
             restoreGrokJumpSound();
             syncImagineSelectionAfterDeletion();
@@ -4937,7 +4981,7 @@
             grokSavedPostUrls.delete(href);
             if (replacement) {
                 url.pathname = '/imagine/post/' + replacement;
-                grokSavedPostUrls.add(url.href);
+                cacheGrokSavedPost(url.href);
             }
             changed = true;
         }
@@ -7060,6 +7104,13 @@
                     ? (vol < 10 / 100 ? 0.02 : 0.1)
                     : (vol <= 10 / 100 ? 0.02 : 0.1);
                 const delta = e.code === 'ArrowUp' ? step : -step;
+                if (e.code === 'ArrowUp' && isGrokHost() && isGrokImaginePage()) {
+                    // Volume up is an explicit request for sound, including during J restoration.
+                    grokJumpSound = null;
+                    try { sessionStorage.removeItem(GROK_JUMP_SOUND_KEY); } catch (_) {}
+                    setGrokImagineMuteState(false);
+                    video.muted = false;
+                }
                 sharedVolume = Math.round(Math.max(0, Math.min(1, vol + delta)) * 100) / 100;
                 try { localStorage.setItem(STORAGE_KEY, String(sharedVolume)); } catch (e) {}
                 if (isPostPage()) {

@@ -181,7 +181,7 @@ test('saved J opens loaded post links, skips hidden cards, and ignores repeats a
   h.context.location.pathname = '/imagine/saved';
   const opened = [];
   h.context.location.assign = url => opened.push(url);
-  const link = (href, visible = true) => ({ href, visibility: 'visible',
+  const link = (href, visible = true) => ({ href: new URL(href, 'https://grok.com').href, visibility: 'visible',
     getClientRects: () => visible ? [{}] : [], click() { opened.push(this.href); } });
   const first = link('/imagine/post/first?conversation=original');
   const hidden = link('/imagine/post/hidden', false);
@@ -206,7 +206,8 @@ test('saved cache retains unmounted posts, deduplicates remounts, and captures o
   h.context.location.pathname = '/imagine/saved';
   h.context.location.assign = url => opened.push(url);
   h.context.getComputedStyle = () => ({ visibility: 'visible' });
-  const card = href => ({ href, getClientRects: () => [{}], click: () => opened.push(href) });
+  const card = href => ({ href: new URL(href, 'https://grok.com').href, getClientRects: () => [{}],
+    click() { opened.push(this.href); } });
   let cards = [card('/imagine/post/top?conversation=one')];
   h.context.document.querySelectorAll = () => cards;
   h.context.captureGrokSavedPosts();
@@ -225,7 +226,7 @@ test('saved cache retains unmounted posts, deduplicates remounts, and captures o
   h.press({ code: 'KeyJ', key: 'j' });
   vm.runInContext('Math.random = () => 0.999', h.context);
   h.press({ code: 'KeyJ', key: 'j' });
-  assert.deepEqual(opened, ['/imagine/post/top?conversation=one', '/imagine/post/bottom?conversation=two']);
+  assert.deepEqual(opened, ['https://grok.com/imagine/post/top?conversation=one', 'https://grok.com/imagine/post/bottom?conversation=two']);
 });
 
 test('saved cache restores from local storage in a new session and rejects unrelated stored URLs', () => {
@@ -541,6 +542,70 @@ test('J origin survives unidentified items in the same conversation but clears o
   h.context.history.replaceState({}, '', '/imagine/post/first?conversation=different');
   // Same media path in another conversation must not retain the previous J origin.
   assert.equal(vm.runInContext('grokJumpEntryPath', h.context), null);
+});
+
+test('Imagine volume up clears native mute and pending J mute restoration in page/fullscreen modes', () => {
+  for (const fullscreen of [false, true]) {
+    const data = new Map();
+    const storage = { getItem: key => data.get(key) || null, setItem: (key, value) => data.set(key, value),
+      removeItem: key => data.delete(key) };
+    const h = setup(storage, storage);
+    const video = { volume: 1, muted: true };
+    if (fullscreen) h.context.document.fullscreenElement = { tagName: 'VIDEO' };
+    let nativeMuted = true;
+    h.context.getTargetVideo = () => video;
+    h.context.isPostPage = () => true;
+    h.context.STORAGE_KEY = 'volume';
+    h.context.showVolumeOverlay = () => {};
+    h.context.applySharedVolumeToAll = () => {};
+    h.context.getComputedStyle = () => ({ visibility: 'visible' });
+    const control = { textContent: 'Unmute', getClientRects: () => [{}], click() { nativeMuted = false; this.textContent = 'Mute'; } };
+    h.context.document.querySelectorAll = () => [control];
+    h.context.pickBestVisibleVideo = () => video;
+    vm.runInContext('grokJumpSound = { path: location.pathname, muted: true, expires: Date.now() + 10000 }', h.context);
+    storage.setItem('ivGrokJumpSound', 'pending');
+    h.press({ code: 'ArrowUp', key: 'ArrowUp' });
+    assert.equal(nativeMuted, false);
+    assert.equal(video.muted, false);
+    assert.equal(data.has('ivGrokJumpSound'), false);
+    h.context.restoreGrokJumpSound();
+    assert.equal(video.muted, false, 'pending restoration cannot remute after volume up');
+    h.press({ code: 'ArrowUp', key: 'ArrowUp' });
+    assert.equal(nativeMuted, false, 'repeated volume up does not toggle mute back on');
+  }
+});
+
+test('cache migration groups by conversation and Saved observations replace targets without rescanning other groups', () => {
+  const prefix = 'https://grok.com/imagine/post/';
+  const initial = [prefix + 'old?conversation=group', prefix + 'other?conversation=other',
+    prefix + 'last?conversation=group', prefix + 'no-conversation-a', prefix + 'no-conversation-b'];
+  const data = new Map([['ivGrokSavedPostUrls', JSON.stringify(initial)]]);
+  const storage = { getItem: key => data.get(key) || null, setItem: (key, value) => data.set(key, value) };
+  const h = setup(storage);
+  let cached = JSON.parse(data.get('ivGrokSavedPostUrls'));
+  assert.equal(cached.length, 4);
+  assert.equal(cached.includes(initial[0]), false);
+  assert.equal(cached.includes(initial[2]), true);
+  h.context.location.pathname = '/imagine/saved';
+  h.context.getComputedStyle = () => ({ visibility: 'visible' });
+  const fresh = prefix + 'fresh?conversation=group&extra=keep';
+  h.context.document.querySelectorAll = () => [{ href: fresh, getClientRects: () => [{}] }];
+  h.context.captureGrokSavedPosts();
+  h.context.captureGrokSavedPosts();
+  cached = JSON.parse(data.get('ivGrokSavedPostUrls'));
+  assert.equal(cached.length, 4);
+  assert.equal(cached.includes(initial[2]), false);
+  assert.equal(cached.includes(fresh), true);
+  assert.equal(cached.includes(initial[1]), true, 'unvisited group remains cached');
+  assert.equal(cached.includes(initial[3]), true);
+  assert.equal(cached.includes(initial[4]), true);
+  h.context.location.pathname = '/imagine/post/different-item';
+  h.context.location.search = '?conversation=group';
+  const opened = [];
+  h.context.location.assign = url => opened.push(url);
+  for (let i = 0; i < 20; i++) h.press({ code: 'KeyJ', key: 'j' });
+  assert.equal(opened.length, 20);
+  assert.equal(opened.includes(fresh), false, 'exclude entire current conversation');
 });
 
 test('ordinary entries retain back navigation and leaving a J post clears its origin', () => {

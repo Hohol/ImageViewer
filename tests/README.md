@@ -158,3 +158,5 @@ fixtures synthetic. Add regression coverage where a bug belongs, and update the
 coverage table when introducing tests for another feature or site.
 
 Cached Imagine links are repaired after successful single/bulk deletions using surviving filmstrip items, preserving conversation/query parameters. Regression checks also cover unidentified items within the same conversation and clearing J origin on a conversation change.
+
+Imagine cache regression checks cover migration to one URL per conversation, replacement by newly observed Saved links, retention of unvisited groups and links without conversation IDs, and excluding the current conversation from J selection.
