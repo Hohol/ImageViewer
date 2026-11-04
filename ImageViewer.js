@@ -1346,8 +1346,11 @@
         const maxBytes = 512 * 1024 * 1024;
         const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const turnKey = (turn) => turn.getAttribute('data-turn-key') || turn.getAttribute('data-testid');
-        const timeline = () => document.querySelector(timelineSelector);
-        const conversationId = () => document.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
+        const timeline = () => Array.from(document.querySelectorAll(timelineSelector)).find(root => {
+            const rect = root.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        });
+        const conversationId = () => timeline()?.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
             timeline()?.querySelector('[data-chatgpt-selection-conversation-id]')?.getAttribute('data-chatgpt-selection-conversation-id') ||
             location.pathname.match(/\/c\/([^/]+)/)?.[1] || null;
         const log = (event, detail) => ivChatGPTNavigationDebug?.record('scan-' + event, detail);
@@ -1672,8 +1675,11 @@
         }
 
         function images() {
-            if (!syncConversation() || !records.size) return cacheOnly() ? [] : null;
-            const current = cacheOnly() ? [] : mounted();
+            if (!syncConversation()) return cacheOnly() ? [] : null;
+            if (!records.size && !cacheOnly()) return null;
+            // Reading mounted images never scrolls. They remain usable while
+            // passive cache copies are pending or unavailable.
+            const current = mounted();
             const available = new Map(current.map((item) => [item.key, item]));
             // Eligibility was checked on the source image before capture. Cached
             // copies no longer have the site's ancestor markup to inspect.
@@ -3139,7 +3145,7 @@
         galleryInPage = false;
         
         imgs = collectNavigableImages();
-        if (ivChatGPTGallery?.cacheOnly && !imgs.length) { showViewerToast('No cached images available yet'); return; }
+        if (ivChatGPTGallery?.cacheOnly && !imgs.length) { showViewerToast('No cached or mounted images available yet'); return; }
         
         // Cached ChatGPT images have their own URLs; match their stable message/slot key.
         const key = ivChatGPTGallery?.key(img);
