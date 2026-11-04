@@ -1333,7 +1333,7 @@
         layoutObserver.observe(panel);
         const timer = setInterval(refresh, 1000);
         refresh();
-        return { get active() { return !!run; }, stop: () => finish('Retries stopped'), destroy: () => {
+        return { recordDebug: debugLog, get active() { return !!run; }, stop: () => finish('Retries stopped'), destroy: () => {
             destroyed = true;
             soundObserver.disconnect();
             titleObserver.disconnect();
@@ -1382,7 +1382,12 @@
         const conversationId = () => timeline()?.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
             timeline()?.querySelector('[data-chatgpt-selection-conversation-id]')?.getAttribute('data-chatgpt-selection-conversation-id') ||
             location.pathname.match(/\/c\/([^/]+)/)?.[1] || null;
-        const log = (event, detail) => ivChatGPTNavigationDebug?.record('scan-' + event, detail);
+        const log = (event, detail) => {
+            ivChatGPTNavigationDebug?.record('scan-' + event, detail);
+            if (typeof CHATGPT_SHOW_DEBUG_LOG !== 'undefined' && CHATGPT_SHOW_DEBUG_LOG && /^(image-unavailable|branch-discarded)$/.test(event)) {
+                ivChatGPTControls?.recordDebug('gallery-' + event, detail);
+            }
+        };
 
         function newPassiveSession() {
             return { passive: true, cancelled: false, controllers: new Set(), attempted: new WeakMap() };
@@ -2247,6 +2252,48 @@
         captureMounted();
         return {
             scan, cancel, images, findNext, nearestImage,
+            debugSnapshot(selected, list) {
+                if (typeof CHATGPT_SHOW_DEBUG_LOG === 'undefined' || !CHATGPT_SHOW_DEBUG_LOG) return;
+                const rect = element => {
+                    const r = element.getBoundingClientRect();
+                    return { x: r.x, y: r.y, width: r.width, height: r.height };
+                };
+                const root = timeline();
+                const inspectImage = img => {
+                    const turn = img.closest(turnSelector);
+                    const owner = img.closest('[data-chatgpt-search-message-ids], [data-message-id]');
+                    const style = getComputedStyle(img);
+                    return { selected: img === selected, connected: img.isConnected, bounds: rect(img),
+                        complete: img.complete, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight,
+                        display: style.display, visibility: style.visibility, excluded: isExcludedImage(img),
+                        inTimeline: !!root?.contains(img), turn: turn && turnKey(turn),
+                        discardedTurn: !!turn && discardedTurns.get(turn) === turnKey(turn),
+                        discardedImage: discardedImages.get(img), key: imageKeys.get(img),
+                        messageIds: owner?.getAttribute('data-chatgpt-search-message-ids'),
+                        previewLabel: img.closest('button')?.getAttribute('aria-label') };
+                };
+                const visible = Array.from(document.querySelectorAll('img')).filter(img => {
+                    const r = img.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight &&
+                        r.right > 0 && r.left < window.innerWidth;
+                });
+                ivChatGPTControls?.recordDebug('gallery-open', {
+                    cacheOnly: cacheOnly(), path: location.pathname, conversation, detectedConversation: conversationId(),
+                    conversationPath, departedConversation, pageHidden,
+                    selected: inspectImage(selected), returnedImages: list.length,
+                    timelines: Array.from(document.querySelectorAll(timelineSelector)).map(element => ({
+                        selected: element === root, bounds: rect(element),
+                        turns: element.querySelectorAll(turnSelector).length,
+                        images: element.querySelectorAll('img').length,
+                        composerId: element.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation'),
+                    })),
+                    visibleImages: visible.slice(0, 30).map(inspectImage),
+                    records: Array.from(records.values()).slice(-60).map(record => ({
+                        key: record.key, turn: record.turn, cached: !!record.url,
+                        pending: !!record.pending, failed: !!record.failed,
+                    })),
+                });
+            },
             get cacheOnly() { return cacheOnly(); },
             cancelNavigation() { if (run?.navigation) cancel('navigation-cancelled'); },
             get scanning() { return !!run && !run.navigation; },
@@ -3182,6 +3229,7 @@
         galleryInPage = false;
         
         imgs = collectNavigableImages();
+        ivChatGPTGallery?.debugSnapshot?.(img, imgs);
         // A directly selected live image can precede cache capture or stable
         // message indexing. Opening it requires neither history nor scrolling.
         if (ivChatGPTGallery?.cacheOnly && !imgs.length && img.isConnected && img.complete && img.naturalWidth > 0) {
