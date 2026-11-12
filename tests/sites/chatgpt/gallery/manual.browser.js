@@ -89,7 +89,7 @@
   ready.src = URL.createObjectURL(blob);
   await ready.decode();
   newTurn.append(ready);
-  replacement.append(newTurn);
+  replacement.append(newTurn, composer);
   root.replaceWith(replacement);
   await sleep(180);
   const saved = gallery.images().find(img => JSON.parse(gallery.key(img))[0] === 'replacement-turn');
