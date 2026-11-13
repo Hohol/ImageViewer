@@ -183,14 +183,19 @@ test('saved J opens loaded post links, skips hidden cards, and ignores repeats a
   h.context.location.assign = url => opened.push(url);
   const link = (href, visible = true) => ({ href: new URL(href, 'https://grok.com').href, visibility: 'visible',
     getClientRects: () => visible ? [{}] : [], click() { opened.push(this.href); } });
-  const first = link('/imagine/post/first?conversation=original');
+  const first = link('https://grok.com/imagine/post/first?conversation=original');
   const hidden = link('/imagine/post/hidden', false);
   const invisible = link('/imagine/post/invisible');
   invisible.visibility = 'hidden';
-  h.context.document.querySelectorAll = () => [hidden, first, invisible];
+  const external = link('https://example.com/imagine/post/external');
+  const queryOnly = link('/imagine/saved?redirect=/imagine/post/other');
+  const links = [hidden, first, invisible, external, queryOnly];
+  h.context.document.querySelectorAll = selector =>
+    selector === 'a[href*="/imagine/post/"]' ? links : [];
   h.context.getComputedStyle = el => ({ visibility: el.visibility });
   h.press({ code: 'KeyJ', key: 'j' });
   assert.deepEqual(opened, [first.href]);
+  assert.equal(vm.runInContext('grokSavedPostUrls.size', h.context), 1);
   for (const guard of [{ repeat: true }, { target: { typing: true } }, { ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }]) h.press({ code: 'KeyJ', key: 'j', ...guard });
   assert.equal(opened.length, 1);
   h.context.document.querySelectorAll = () => [];

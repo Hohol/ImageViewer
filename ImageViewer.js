@@ -3906,6 +3906,14 @@
     const grokSavedPostUrls = new Set();
     const grokSavedPostByGroup = new Map();
 
+    function grokSavedPostUrl(href) {
+        try {
+            const url = new URL(href, location.origin);
+            if (url.origin === location.origin && /^\/imagine\/post\/[^/]+\/?$/.test(url.pathname)) return url;
+        } catch (_) {}
+        return null;
+    }
+
     function cacheGrokSavedPost(href) {
         const url = new URL(href, location.origin);
         const conversation = url.searchParams.get('conversation');
@@ -3924,12 +3932,8 @@
             if (Array.isArray(stored)) {
                 for (const href of stored) {
                     if (typeof href !== 'string') continue;
-                    try {
-                        const url = new URL(href, location.origin);
-                        if (url.origin === location.origin && /^\/imagine\/post\/[^/]+\/?$/.test(url.pathname)) {
-                            cacheGrokSavedPost(url.href);
-                        }
-                    } catch (_) {}
+                    const url = grokSavedPostUrl(href);
+                    if (url) cacheGrokSavedPost(url.href);
                 }
                 const normalized = JSON.stringify(Array.from(grokSavedPostUrls));
                 if (normalized !== JSON.stringify(stored)) localStorage.setItem(GROK_SAVED_POST_CACHE_KEY, normalized);
@@ -3941,16 +3945,15 @@
         const mounted = new Map();
         if (!isGrokImagineSavedPage()) return mounted;
         let changed = false;
-        document.querySelectorAll(
-            '[class~="group/compact-card"] a[href^="/imagine/post/"], ' +
-            'div.grid.w-full.select-none a[href^="/imagine/post/"]'
-        ).forEach((link) => {
+        document.querySelectorAll('a[href*="/imagine/post/"]').forEach((link) => {
+            const url = grokSavedPostUrl(link.href);
+            if (!url) return;
             if (!link.getClientRects().length || getComputedStyle(link).visibility === 'hidden') {
-                changed = grokSavedPostUrls.delete(link.href) || changed;
+                changed = grokSavedPostUrls.delete(url.href) || changed;
                 return;
             }
-            changed = cacheGrokSavedPost(link.href) || changed;
-            mounted.set(link.href, link);
+            changed = cacheGrokSavedPost(url.href) || changed;
+            mounted.set(url.href, link);
         });
         if (changed) {
             try {
