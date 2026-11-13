@@ -1259,6 +1259,8 @@
             if (event.button === 0 && imageFromEventTarget(event.target)) return;
             const item = event.target.closest?.('button');
             if (item && isPromptSend(item)) { manualSubmission(item); return; }
+            // ChatGPT can open uploaded images in its own preview, outside our gallery.
+            if (item?.matches('button[type="button"][aria-label="User attachment"]') && item.querySelector('img')) return;
             if (run && item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||
                 item.matches('[data-testid="send-button"]'))) finish('Stopped after manual action');
         }, true);
