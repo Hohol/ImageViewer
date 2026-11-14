@@ -1292,6 +1292,61 @@
             return item.matches('[data-testid="send-button"]') || /^(send|send prompt|submit|save(?: changes|\s*(?:&|and)\s*submit)?)$/i.test(label) ||
                 (item.type === 'submit' && inEditor);
         }
+        let cancelSendScrollRecovery = () => {};
+        function recoverSendScroll() {
+            cancelSendScrollRecovery();
+            const root = timeline();
+            if (!root) return;
+            const conversation = identity();
+            const initialTop = root.scrollTop;
+            const initialHeight = root.scrollHeight;
+            const initialTurn = key(latest());
+            const scrollKeys = ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '];
+            const cancelOnInput = event => {
+                if (!event.isTrusted) return;
+                if (event.type !== 'keydown' || (scrollKeys.includes(event.key) &&
+                    !event.target.closest?.('input, textarea, [contenteditable="true"]'))) cancelSendScrollRecovery();
+            };
+            const inputEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+            for (const type of inputEvents) document.addEventListener(type, cancelOnInput, true);
+            const start = performance.now();
+            let minimumHeight = initialHeight;
+            let nearestBottom = distanceFromLatest(root);
+            let jumpAt = null;
+            let frame;
+            cancelSendScrollRecovery = () => {
+                cancelAnimationFrame(frame);
+                for (const type of inputEvents) document.removeEventListener(type, cancelOnInput, true);
+                cancelSendScrollRecovery = () => {};
+            };
+            function checkScroll(now) {
+                if (now - start > 1800 || timeline() !== root || identity() !== conversation || ivChatGPTGallery?.scanning) {
+                    cancelSendScrollRecovery();
+                    return;
+                }
+                const distance = distanceFromLatest(root);
+                nearestBottom = Math.min(nearestBottom, distance);
+                minimumHeight = Math.min(minimumHeight, root.scrollHeight);
+                // The recorded jump followed a sharp contraction of the timeline.
+                // Compare with the clamped old offset so simple resizing is insufficient.
+                const reverse = getComputedStyle(root).flexDirection === 'column-reverse';
+                const clampedTop = Math.min(initialTop, root.scrollHeight - root.clientHeight);
+                const movedUp = reverse ? initialTop - root.scrollTop : clampedTop - root.scrollTop;
+                if (initialHeight - minimumHeight >= 256 && distance >= 256 &&
+                    (movedUp >= 256 || distance - nearestBottom >= 256)) jumpAt ??= now;
+                if (jumpAt !== null && now - jumpAt >= 200 && distance >= 256 &&
+                    key(latest()) !== initialTurn && composer()?.querySelector(stopSelector)) {
+                    const bottom = root.querySelector('button[aria-label="Scroll to bottom"][aria-hidden="false"]');
+                    if (enabled(bottom)) {
+                        cancelSendScrollRecovery();
+                        bottom.click();
+                        return;
+                    }
+                }
+                frame = requestAnimationFrame(checkScroll);
+            }
+            frame = requestAnimationFrame(checkScroll);
+        }
         function manualSubmission(target) {
             if (destroyed || automaticClick) return;
             const turn = target.closest?.(turnSelector);
@@ -1304,6 +1359,7 @@
             submissionTick = true;
             submissionScope = scope;
             setTimeout(() => { submissionTick = false; }, 0);
+            if (!turn && (text || scope?.querySelector('[data-testid="send-button"]:enabled'))) recoverSendScroll();
             finish('');
             if (text !== 'd') return;
             const current = latest();
@@ -1405,6 +1461,7 @@
         refresh();
         return { recordDebug: debugLog, get active() { return !!run; }, stop: () => finish('Retries stopped'), destroy: () => {
             destroyed = true;
+            cancelSendScrollRecovery();
             soundObserver.disconnect();
             titleObserver.disconnect();
             document.removeEventListener('visibilitychange', updateGenerationTitle);
