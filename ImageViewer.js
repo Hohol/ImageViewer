@@ -2364,8 +2364,10 @@
             // Fresh ChatGPT results can target the preview button instead of its image.
             const preview = isChatGPTHost()
                 ? el.closest('button[data-testid="generated-image-preview"], [role="group"][aria-label="Generated images"] button[aria-label^="Show generated image "]')
-                : null;
-            el = preview ? preview.querySelector('img') : el.closest('img');
+                : isGrokHost() ? el.closest(GROK_CHAT_IMAGE_BUTTON) : null;
+            el = preview
+                ? preview.querySelector(isGrokHost() ? 'img:not([aria-hidden="true"])' : 'img')
+                : el.closest('img');
         }
         if (!el || el.tagName !== 'IMG' || isExcludedImage(el)) return null;
         return el;
@@ -2574,8 +2576,13 @@
         return true;
     }
 
-    // Grok: only main chat generated images (opt-in), not thumbnails / chrome / etc.
+    const GROK_CHAT_IMAGE_BUTTON = '[data-generated-image-tile] button[aria-label], ' +
+        '[data-testid="user-turn-attachments"] [data-user-media-tile] button[aria-label]';
+
+    // Grok: opt in to main chat and Imagine images.
     function isGrokOptInImage(img) {
+        if (img.getAttribute('aria-hidden') === 'true') return false;
+        if (img.closest(GROK_CHAT_IMAGE_BUTTON)) return true;
         if (img.closest('[class*="group/grok-image"]')) return true;
         // Imagine lightbox: the grid-position classes now live on a wrapper,
         // while the hero image is nested inside the explicit media frame.

@@ -3,6 +3,22 @@ Promise.resolve().then(() => {
   expectEligibility(sample('<div class="group/grok-image"><img></div>'), true, 'Grok generated chat image');
   expectEligibility(sample('<div class="flex flex-col gap-2 group/grok-image"><img></div>'), true,
     'Grok generated-image exception inside generic block');
+  for (const [tile, label] of [
+    ['<div data-testid="generated-image-row"><div data-generated-image-tile>', 'generated image'],
+    ['<div data-testid="user-turn-attachments"><div data-user-media-tile>', 'chat attachment'],
+  ]) {
+    const img = sample(tile + '<span><button aria-label="image.jpg"><span><img></span></button>' +
+      '<button aria-label="Make video"><span></span></button></span></div><img aria-hidden="true"></div>');
+    const preview = img.closest('button');
+    const duplicate = samples.querySelector('img[aria-hidden]');
+    duplicate.src = img.src;
+    expectEligibility(img, true, 'Grok chat tile ' + label);
+    expectEligibility(duplicate, false, 'Grok hidden copy of ' + label);
+    check(imageFromEventTarget(preview) === img && imageFromEventTarget(img.parentElement) === img,
+      'Grok preview button and its image wrapper resolve to ' + label);
+    check(imageFromEventTarget(preview.nextElementSibling.firstElementChild) === null,
+      'Grok tile action button retains its own click');
+  }
   expectEligibility(sample('<div data-lightbox-media><div data-media-frame><img></div></div>'), true,
     'Grok Imagine lightbox hero');
   expectEligibility(sample('<div data-lightbox-media><div data-media-frame><div data-filmstrip-item><img></div></div></div>'), false,
