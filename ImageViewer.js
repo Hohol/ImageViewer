@@ -1293,7 +1293,7 @@
                 (item.type === 'submit' && inEditor);
         }
         let cancelSendScrollRecovery = () => {};
-        function recoverSendScroll() {
+        function recoverSendScroll(editedTurn) {
             cancelSendScrollRecovery();
             const root = timeline();
             if (!root) return;
@@ -1335,7 +1335,9 @@
                 if (initialHeight - minimumHeight >= 256 && distance >= 256 &&
                     (movedUp >= 256 || distance - nearestBottom >= 256)) jumpAt ??= now;
                 if (jumpAt !== null && now - jumpAt >= 200 && distance >= 256 &&
-                    key(latest()) !== initialTurn && composer()?.querySelector(stopSelector)) {
+                    composer()?.querySelector(stopSelector) &&
+                    (editedTurn ? !editedTurn.isConnected || !editedTurn.querySelector(editorSelector) :
+                        key(latest()) !== initialTurn)) {
                     const bottom = root.querySelector('button[aria-label="Scroll to bottom"][aria-hidden="false"]');
                     if (enabled(bottom)) {
                         cancelSendScrollRecovery();
@@ -1359,7 +1361,7 @@
             submissionTick = true;
             submissionScope = scope;
             setTimeout(() => { submissionTick = false; }, 0);
-            if (!turn && (text || scope?.querySelector('[data-testid="send-button"]:enabled'))) recoverSendScroll();
+            if (text || (!turn && scope?.querySelector('[data-testid="send-button"]:enabled'))) recoverSendScroll(turn);
             finish('');
             if (text !== 'd') return;
             const current = latest();
