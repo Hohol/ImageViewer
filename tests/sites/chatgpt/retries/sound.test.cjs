@@ -46,6 +46,29 @@ test('failed generations stay silent; a subsequent successful retry chimes', () 
   h.turn.busy = false; h.turn.images = [{ complete: true, naturalWidth: 100 }]; h.check();
   assert.equal(h.tones(), 2);
 });
+
+test('image load chimes before the reply finishes and preserves unread success', () => {
+  const h = harness(), doc = h.context.document;
+  doc.hidden = true;
+  h.turn.busy = true;
+  h.turn.state = 'in_progress';
+  const img = { complete: true, naturalWidth: 100, matches: () => true, closest: () => ({}) };
+  h.turn.images = [img];
+  h.check();
+  assert.equal(h.tones(), 0, 'loading game images stay silent');
+  img.closest = () => null;
+  h.context.imageLoadTarget = img;
+  vm.runInContext('onGeneratedImageLoad({ target: imageLoadTarget })', h.context);
+  assert.equal(h.tones(), 2);
+  assert.equal(doc.title, '✅ My chat');
+  h.turn.response = 'r1|r2';
+  h.check();
+  h.turn.busy = false;
+  h.turn.state = 'complete';
+  h.check();
+  assert.equal(h.tones(), 2);
+  assert.equal(doc.title, '✅ My chat');
+});
 test('changing chats discards a pending sound', () => {
   const h = harness();
   h.turn.busy = true; h.check(); h.chat('two');
@@ -70,6 +93,23 @@ test('a different completed response cannot consume a pending sound', () => {
   h.turn.response = 'different'; h.turn.busy = false;
   h.turn.images = [{ complete: true, naturalWidth: 1024 }]; h.check();
   assert.equal(h.tones(), 0);
+});
+
+test('an edited prompt chimes for the new image, even if the old image is recreated under a new response ID', () => {
+  const h = harness();
+  h.turn.images = [{ src: 'old-image', complete: true, naturalWidth: 100 }];
+  h.context.rememberPreEditImages(h.turn);
+  h.turn.images = [];
+  h.context.rememberPreEditImages(h.turn);
+  h.turn.response = 'r2';
+  h.turn.busy = true;
+  h.turn.state = 'in_progress';
+  h.turn.images = [{ src: 'old-image', complete: true, naturalWidth: 100 }];
+  h.check();
+  assert.equal(h.tones(), 0);
+  h.turn.images.push({ src: 'new-image', complete: true, naturalWidth: 100 });
+  h.check();
+  assert.equal(h.tones(), 2);
 });
 
 test('tab title marks generation and unseen success, then clears on return', () => {

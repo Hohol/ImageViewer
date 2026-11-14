@@ -876,6 +876,20 @@
         let soundConversation = identity();
         let pendingSound = null;
         const soundedResponses = new Set();
+        const soundedImages = new WeakMap();
+        const idleImages = new WeakMap();
+        let preEditImageSources = new Set();
+        let preEditTurn;
+        const notificationImageSource = img => img.currentSrc || img.src || '';
+        function rememberPreEditImages(turn) {
+            const turnKey = key(turn);
+            if (preEditTurn !== turnKey) preEditImageSources.clear();
+            preEditTurn = turnKey;
+            for (const img of images(turn)) {
+                const src = notificationImageSource(img);
+                if (src) preEditImageSources.add(src);
+            }
+        }
         function unlockSound(event) {
             if (!event.isTrusted || destroyed) return;
             try {
@@ -913,6 +927,7 @@
             if (identity() !== soundConversation) {
                 soundConversation = identity();
                 pendingSound = null;
+                preEditImageSources.clear();
                 unreadGeneration = false;
                 generationFinished = false;
             }
@@ -924,19 +939,34 @@
             const response = [...new Set(responseIds(turn).split(/[\s|]+/)
                 .filter(id => id && !/^fallback-turn-/.test(id)))].sort().join('|');
             const token = soundConversation + '|' + key(turn) + '|' + response;
+            const loaded = images(turn).filter(img => img.complete && img.naturalWidth > 0 &&
+                !preEditImageSources.has(notificationImageSource(img)) &&
+                !img.closest?.('[data-testid="image-gen-loading-game-board"]'));
+            if (generationFinished && loaded.length &&
+                loaded.every(img => soundedImages.get(img) === notificationImageSource(img))) return;
             if (busy(turn)) {
-                generationFinished = false;
-                unreadGeneration = false;
-                updateGenerationTitle();
-                pendingSound = token;
+                if (!soundedResponses.has(token) && pendingSound !== token) {
+                    pendingSound = token;
+                    generationFinished = false;
+                    unreadGeneration = false;
+                    updateGenerationTitle();
+                }
+                if (loaded.every(img => idleImages.get(img) === notificationImageSource(img))) return;
+            } else if (state(turn) !== 'complete') {
                 return;
+            } else if (pendingSound !== token) {
+                for (const img of loaded) idleImages.set(img, notificationImageSource(img));
             }
-            if (pendingSound !== token || state(turn) !== 'complete') return;
-            if (!images(turn).some((img) => img.complete && img.naturalWidth > 0)) return;
+            if (pendingSound !== token || soundedResponses.has(token)) return;
+            if (!loaded.length) return;
             pendingSound = null;
-            if (soundedResponses.has(token)) return;
             soundedResponses.add(token);
             generationFinished = true;
+            if (loaded.every(img => soundedImages.get(img) === notificationImageSource(img))) {
+                updateGenerationTitle();
+                return;
+            }
+            for (const img of loaded) soundedImages.set(img, notificationImageSource(img));
             unreadGeneration = true;
             unreadImageTurn = key(turn);
             updateGenerationTitle();
@@ -946,7 +976,11 @@
         }
         const soundObserver = new MutationObserver(checkGenerationSound);
         soundObserver.observe(document.body, { childList: true, subtree: true, attributes: true,
-            attributeFilter: ['data-talvt-turn-state', 'data-chatgpt-search-message-ids', 'src'] });
+            attributeFilter: ['data-talvt-turn-state', 'data-chatgpt-search-message-ids', 'src', 'srcset', 'alt'] });
+        const onGeneratedImageLoad = event => {
+            if (event.target.matches?.('img[alt^="Generated image"]')) checkGenerationSound();
+        };
+        document.addEventListener('load', onGeneratedImageLoad, true);
         function setRetryButtonActive(item, active) {
             item.style.background = active ? '#51432b' : 'transparent';
             item.style.borderColor = active ? '#a58a55' : '#888';
@@ -1156,6 +1190,7 @@
                     status.textContent = `Attempt ${attempt}/${session.limit} · Editing`;
                     const oldIds = responseIds(turn);
                     const oldImages = new Set(images(turn).map((img) => img.currentSrc || img.src));
+                    rememberPreEditImages(turn);
                     click(session, editButton(turn), 'Edit message');
                     await waitFor(session, () => latest()?.querySelector(editorSelector),
                         5000, 'Could not open message editor');
@@ -1361,6 +1396,8 @@
             submissionTick = true;
             submissionScope = scope;
             setTimeout(() => { submissionTick = false; }, 0);
+            if (turn) rememberPreEditImages(turn);
+            else preEditImageSources.clear();
             if (text || (!turn && scope?.querySelector('[data-testid="send-button"]:enabled'))) recoverSendScroll(turn);
             finish('');
             if (text !== 'd') return;
@@ -1384,6 +1421,8 @@
             if (typeof overlay !== 'undefined' && overlay?.contains(event.target)) return;
             if (event.button === 0 && imageFromEventTarget(event.target)) return;
             const item = event.target.closest?.('button');
+            const turn = item?.closest(turnSelector);
+            if (turn && item.matches('button[aria-label="Edit message"]')) rememberPreEditImages(turn);
             if (item && isPromptSend(item)) { manualSubmission(item); return; }
             // ChatGPT can open uploaded images in its own preview, outside our gallery.
             if (item?.matches('button[type="button"][aria-label="User attachment"]') && item.querySelector('img')) return;
@@ -1465,6 +1504,7 @@
             destroyed = true;
             cancelSendScrollRecovery();
             soundObserver.disconnect();
+            document.removeEventListener('load', onGeneratedImageLoad, true);
             titleObserver.disconnect();
             document.removeEventListener('visibilitychange', updateGenerationTitle);
             document.removeEventListener('pointerdown', unlockSound, true);
