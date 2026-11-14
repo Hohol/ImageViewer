@@ -10,7 +10,7 @@
 
 ## Feature map
 
-- **Gallery mode** — Image overlay opened by clicking an eligible image or pressing `F` or `/`; supports browser fullscreen and selects the nearest image when none is visible. Entry point: `showGallery()`.
+- **Gallery mode** — Image overlay opened by clicking an eligible image or pressing `F` or `/`; supports browser fullscreen and selects the nearest image when none is visible. **Fit screen** fits the image within the viewport. **Native resolution** displays it at its natural pixel size and allows scrolling when it exceeds the viewport. Entry point: `showGallery()`.
 - **Image eligibility** — Shared exclusion rules for clicks, navigation, and cache capture. Entry point: `isExcludedImage()`.
 - **Video viewing** — Fullscreen, playback controls, custom loops, and clip export; Grok Imagine also supports sequential and random video navigation. Entry points: `toggleVideoFullscreen()`, `getTargetVideo()`, `startLooping()`, `exportLoopFragment()`, and `navigateImagineVideo()`.
 - **ChatGPT gallery and image scan** — Caches images across virtualized history, preserves identities across grouped layouts, and deduplicates previews and pickers. Scans pause in hidden tabs and block manual scrolling; the cache resets on conversation changes. Entry point: `createChatGPTGallery()` → `scan()`.

@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const { readFileSync } = require('node:fs');
 const { scriptPath } = require('../../../support/source.cjs');
 const source = readFileSync(scriptPath, 'utf8');
-const start = source.indexOf('        imgs = collectNavigableImages();', source.indexOf('    function showGallery(img)'));
+const start = source.indexOf('        imgs = collectNavigableImages();', source.indexOf('    function showGallery('));
 const block = source.slice(start, source.indexOf('        // Cached ChatGPT images', start));
 test('a selected loaded live image opens during automation even before it is indexed', () => {
   let toasts = 0;

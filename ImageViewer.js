@@ -3357,7 +3357,7 @@
         return true;
     }
 
-    function showGallery(img) {
+    function showGallery(img, nativeResolution = overlayFitNative) {
         if (ivChatGPTGallery?.scanning) return;
         if (!img || isExcludedImage(img)) return;
         galleryInPage = false;
@@ -3400,6 +3400,7 @@
             zIndex: 2147483647, cursor: 'zoom-out'
         });
 
+        overlayFitNative = nativeResolution;
         displayImageInOverlay(imgs[currentIndex] || img);
         applyOverlayImageFitMode();
 
@@ -3725,6 +3726,7 @@
             items: [
                 ['H', 'Show keyboard shortcuts'],
                 ['F or /', 'Toggle image gallery or video fullscreen'],
+                ['.', 'Open image gallery in native resolution'],
                 ['R', 'Random image (outside Imagine)'],
                 ['T', 'Open image in new tab (page or gallery)'],
                 ['C', 'Copy image or current video frame'],
@@ -6988,8 +6990,9 @@
             return;
         }
 
-        // F or / to toggle gallery mode or video fullscreen (plain keys only — not Cmd/Ctrl/Alt+F so Find/search works)
-        if (e.code === 'KeyF' || e.code === 'Slash') {
+        // F or / toggles the gallery or video fullscreen. Period opens the gallery in native resolution.
+        const openNativeGallery = e.code === 'Period' && !overlay && !e.shiftKey;
+        if (e.code === 'KeyF' || e.code === 'Slash' || openNativeGallery) {
             if (e.metaKey || e.ctrlKey || e.altKey) {
                 return;
             }
@@ -7002,7 +7005,7 @@
                 hideGallery();
                 return;
             }
-            if (document.querySelectorAll('video').length > 0) {
+            if (!openNativeGallery && document.querySelectorAll('video').length > 0) {
                 const video = getTargetVideo(e);
                 if (video) {
                     e.preventDefault();
@@ -7021,7 +7024,7 @@
             if (img) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                showGallery(img);
+                showGallery(img, openNativeGallery || overlayFitNative);
             }
             return;
         }
