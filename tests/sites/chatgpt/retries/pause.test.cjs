@@ -42,6 +42,31 @@ test('an open editor counts as a mounted turn without its display bubble', () =>
   assert.equal(context.targetMounted({ turnKey: 'target' }), true);
 });
 
+test('queued draw waits for the conversation tail before capturing its target', () => {
+  let current = { id: 'older', querySelector: () => ({}) };
+  let atLatest = false;
+  const context = vm.createContext({
+    editorSelector: 'textarea', latest: () => current, key: turn => turn.id,
+    timeline: () => ({}), latestPosition: () => ({ atLatest }),
+  });
+  vm.runInContext(block, context);
+  const session = { autosend: true };
+  assert.equal(context.targetMounted(session), false);
+  assert.equal(session.turnKey, undefined);
+
+  const target = { id: 'target', querySelector: () => ({}) };
+  current = target;
+  atLatest = true;
+  assert.equal(context.targetMounted(session), true);
+  assert.equal(session.turnKey, 'target');
+
+  current = { id: 'older', querySelector: () => ({}) };
+  assert.equal(context.targetMounted(session), false);
+  current = target;
+  atLatest = false;
+  assert.equal(context.targetMounted(session), true);
+});
+
 test('submitted d after the previous tail does not require scrolling to the response bottom', async () => {
   const previous = { id: 'previous' };
   const current = { id: 'new', querySelector: () => ({}) };

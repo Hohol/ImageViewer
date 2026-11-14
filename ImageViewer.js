@@ -715,6 +715,7 @@
     // ChatGPT drawing controls, generation notifications, and optional debug export.
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
     const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
+    const CHATGPT_TRACE_RETRY_POSITION = false; // Show the button while collecting retry diagnostics.
     function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
         if (!isChatGPTHost()) return null;
         const turnSelector = '[data-turn-key]';
@@ -747,11 +748,16 @@
         }
         const debugButton = button.cloneNode(true);
         debugButton.textContent = 'Debug log';
-        debugButton.hidden = !CHATGPT_SHOW_DEBUG_LOG;
-        if (!CHATGPT_SHOW_DEBUG_LOG) debugButton.style.display = 'none';
+        const showDebugButton = CHATGPT_SHOW_DEBUG_LOG || CHATGPT_TRACE_RETRY_POSITION;
+        const retryPositionStorageKey = 'iv-chatgpt-retry-position-log';
+        debugButton.hidden = !showDebugButton;
+        if (!showDebugButton) debugButton.style.display = 'none';
         debugButton.style.gridRow = '4';
         debugButton.addEventListener('click', () => {
-            const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), events: debugEvents }, null, 2)], { type: 'application/json' });
+            let retryPosition = [];
+            try { retryPosition = JSON.parse(sessionStorage.getItem(retryPositionStorageKey) || '[]'); } catch (_) {}
+            const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(),
+                events: debugEvents, retryPosition }, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
@@ -964,11 +970,65 @@
             }
         }
         const sessionTime = session => Date.now() - (session.pausedMs || 0);
+        const retryTraceNodes = new WeakMap();
+        let nextRetryTraceNode = 1;
+        function retryTraceTurn(turn) {
+            if (!retryTraceNodes.has(turn)) retryTraceNodes.set(turn, nextRetryTraceNode++);
+            const bounds = turn.getBoundingClientRect();
+            return {
+                key: key(turn), node: retryTraceNodes.get(turn), state: state(turn),
+                top: bounds.top, bottom: bounds.bottom,
+                messages: Array.from(turn.querySelectorAll('[data-chatgpt-search-message-ids], [data-message-id]'), item => ({
+                    searchUnit: item.getAttribute('data-chatgpt-search-unit-key'),
+                    searchMessageIds: item.getAttribute('data-chatgpt-search-message-ids'),
+                    messageId: item.getAttribute('data-message-id'),
+                    role: item.getAttribute('data-message-author-role'),
+                    textLength: item.textContent.length,
+                })),
+            };
+        }
+        function recordRetryPosition(event, session) {
+            try {
+                if (!CHATGPT_TRACE_RETRY_POSITION) return;
+                const root = timeline();
+                const turns = Array.from(root?.querySelectorAll(turnSelector) || []);
+                const current = turns.at(-1);
+                const expected = turns.find(turn => key(turn) === session.turnKey);
+                const events = JSON.parse(sessionStorage.getItem(retryPositionStorageKey) || '[]');
+                events.push({
+                    time: new Date().toISOString(), event,
+                    autosend: !!session.autosend, manualPrompt: !!session.manualPrompt,
+                    expectedTurn: session.turnKey, previousTurn: session.previousTurn,
+                    currentTurn: key(current), mountedTurns: turns.map(key),
+                    turnDetails: turns.filter((turn, index) => turn === expected || index >= turns.length - 3)
+                        .map(retryTraceTurn),
+                    hasPromptBubble: !!current?.querySelector('[data-user-message-bubble]'),
+                    hasEditor: !!current?.querySelector(editorSelector),
+                    allowTurnReplacement: !!session.allowTurnReplacement,
+                    promptMatches: session.prompt === undefined ? null : prompt(current).trim() === session.prompt.trim(),
+                    turnState: state(current), busy: busy(current),
+                    position: latestPosition(root, current),
+                    scroll: root && {
+                        top: root.scrollTop, height: root.scrollHeight, clientHeight: root.clientHeight,
+                        direction: getComputedStyle(root).flexDirection,
+                        bottomControls: Array.from(root.parentElement?.querySelectorAll('button[aria-label="Scroll to bottom"]') || [],
+                            item => ({ insideTimeline: root.contains(item), hidden: item.getAttribute('aria-hidden') })),
+                    },
+                });
+                sessionStorage.setItem(retryPositionStorageKey, JSON.stringify(events.slice(-100)));
+            } catch (_) {} // Diagnostics must not interfere with retries.
+        }
         function targetMounted(session) {
             const current = latest();
             if (!current || (!current.querySelector('[data-user-message-bubble]') && !current.querySelector(editorSelector))) return false;
             if (key(current) === session.turnKey) return true;
-            if (!session.turnKey) return latestPosition(timeline(), current).atLatest;
+            if (!session.turnKey) {
+                if (!latestPosition(timeline(), current).atLatest) return false;
+                // A queued draw can start while ChatGPT is showing older history.
+                // Capture its target only after the conversation tail is available.
+                if (session.autosend) session.turnKey = key(current);
+                return true;
+            }
             if (!session.allowTurnReplacement || prompt(current).trim() !== session.prompt?.trim()) return false;
             // A newly submitted message follows the previous tail even when
             // ChatGPT leaves the viewport above the bottom of its response.
@@ -985,6 +1045,7 @@
         async function waitFor(session, predicate, timeout, message) {
             const end = sessionTime(session) + timeout;
             let pausedAt = null;
+            let nextPausedSample = 0;
             let previousStatus = '';
             while (true) {
                 check(session);
@@ -995,7 +1056,12 @@
                         const prefix = previousStatus.match(/^Attempt \d+\/\d+ · /)?.[0] || '';
                         status.textContent = prefix + 'Paused · Scroll back to latest';
                         session.paused = true;
+                        recordRetryPosition('paused', session);
+                        nextPausedSample = pausedAt + 2000;
                         updateGenerationTitle();
+                    } else if (Date.now() >= nextPausedSample) {
+                        recordRetryPosition('still-paused', session);
+                        nextPausedSample = Date.now() + 2000;
                     }
                     await new Promise(resolve => setTimeout(resolve, 250));
                     continue;
@@ -1005,6 +1071,7 @@
                     pausedAt = null;
                     status.textContent = previousStatus;
                     session.paused = false;
+                    recordRetryPosition('resumed', session);
                     updateGenerationTitle();
                 }
                 const result = predicate();
@@ -1149,8 +1216,9 @@
         autosendButton.addEventListener('click', () => {
             if (run?.autosend) { finish('Autosend cancelled'); return; }
             finish('');
-            const session = { conversation: identity(), limit: attemptLimit, autosend: true, turnKey: key(latest()) };
+            const session = { conversation: identity(), limit: attemptLimit, autosend: true };
             run = session;
+            recordRetryPosition('queued-draw', session);
             autosendButton.textContent = 'Cancel queued draw';
             setRetryButtonActive(autosendButton, true);
             void autosend(session);
