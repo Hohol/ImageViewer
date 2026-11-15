@@ -716,8 +716,8 @@
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
     const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
     const CHATGPT_TRACE_RETRY_POSITION = false; // Show the button while collecting retry diagnostics.
-    const CHATGPT_TRACE_GALLERY_CACHE = true; // Temporary diagnostics for passive capture during retries.
-    const CHATGPT_TRACE_IMAGE_NOTIFICATIONS = true;
+    const CHATGPT_TRACE_GALLERY_CACHE = false; // Temporary diagnostics for passive capture during retries.
+    const CHATGPT_TRACE_IMAGE_NOTIFICATIONS = false;
     const galleryCacheTraceKey = 'iv-chatgpt-gallery-cache-log';
     function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
         if (!isChatGPTHost()) return null;
@@ -1602,9 +1602,19 @@
             const rect = root.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
         });
-        const conversationId = () => timeline()?.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
-            timeline()?.querySelector('[data-chatgpt-selection-conversation-id]')?.getAttribute('data-chatgpt-selection-conversation-id') ||
-            location.pathname.match(/\/c\/([^/]+)/)?.[1] || null;
+        function conversationId() {
+            const root = timeline();
+            const id = root?.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
+                root?.querySelector('[data-chatgpt-selection-conversation-id]')?.getAttribute('data-chatgpt-selection-conversation-id') ||
+                location.pathname.match(/\/c\/([^/]+)/)?.[1];
+            if (id || !root) return id || null;
+            // Local chats can place their composer outside the transcript and have no /c/ URL.
+            const composer = Array.from(document.querySelectorAll('[data-map-composer-conversation]')).find(element => {
+                const rect = element.querySelector('form[data-chatgpt-composer]')?.getBoundingClientRect();
+                return rect && rect.width > 0 && rect.height > 0;
+            });
+            return composer?.getAttribute('data-map-composer-conversation') || null;
+        }
         const log = (event, detail) => {
             ivChatGPTNavigationDebug?.record('scan-' + event, detail);
             if (typeof CHATGPT_SHOW_DEBUG_LOG !== 'undefined' && CHATGPT_SHOW_DEBUG_LOG && /^(image-unavailable|branch-discarded)$/.test(event)) {

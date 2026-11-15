@@ -16,3 +16,22 @@ test('gallery reads the visible timeline and its conversation after chat navigat
   assert.equal(vm.runInContext('timeline()', context), current);
   assert.equal(vm.runInContext('conversationId()', context), 'new');
 });
+
+test('a local chat can identify its gallery through the visible composer outside the timeline', () => {
+  const root = {
+    getBoundingClientRect: () => ({ width: 800, height: 600 }),
+    querySelector: () => null,
+  };
+  const composer = (id, width) => ({
+    getAttribute: () => id,
+    querySelector: () => ({ getBoundingClientRect: () => ({ width, height: 60 }) }),
+  });
+  const context = vm.createContext({
+    timelineSelector: '[data-app-action-timeline-scroll]',
+    document: { querySelectorAll: selector => selector === '[data-app-action-timeline-scroll]'
+      ? [root] : [composer('outgoing', 0), composer('local-chatgpt:current', 800)] },
+    location: { pathname: '/' },
+  });
+  vm.runInContext(block, context);
+  assert.equal(vm.runInContext('conversationId()', context), 'local-chatgpt:current');
+});
