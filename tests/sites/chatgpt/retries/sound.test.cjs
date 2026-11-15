@@ -7,12 +7,14 @@ const source = readFileSync(resolve(__dirname, '../../../../ImageViewer.js'), 'u
 const block = source.slice(source.indexOf('        let audioContext = null;'), source.indexOf('        function setRetryButtonActive'));
 function harness() {
   let chat = 'one', turn = { id: 'a', response: 'r1', busy: false, state: 'complete', images: [] }, tones = 0;
+  let now = 0;
   class AudioContext {
     state = 'running'; currentTime = 0; destination = {};
     createOscillator() { return { frequency: {}, connect() {}, start() { tones++; }, stop() {} }; }
     createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
   }
   const context = vm.createContext({ window: { AudioContext, innerWidth: 1000, innerHeight: 800 }, destroyed: false, run: null,
+    Date: { now: () => now },
     identity: () => chat, latest: () => turn, responseIds: t => t.response, key: t => t.id,
     busy: t => t.busy || t.composerStop, turnGenerating: t => t.busy || t.state === 'in_progress',
     state: t => t.state, images: t => t.images.map(img => {
@@ -24,8 +26,23 @@ function harness() {
     document: { title: 'My chat', hidden: false, addEventListener() {}, body: {}, head: {} }, MutationObserver: class { observe() {} } });
   vm.runInContext(block, context);
   context.unlockSound({ isTrusted: true });
-  return { context, check: () => context.checkGenerationSound(), turn, chat: value => { chat = value; }, tones: () => tones };
+  return { context, check: () => context.checkGenerationSound(), turn, chat: value => { chat = value; },
+    advance: ms => { now += ms; context.checkGenerationSound(); }, tones: () => tones };
 }
+
+test('hourglass bridges transient idle steps and clears after sustained idle', () => {
+  const h = harness(), doc = h.context.document;
+  h.turn.busy = true; h.check();
+  h.turn.busy = false; h.advance(750);
+  assert.equal(doc.title, '⏳ My chat');
+  h.turn.busy = true; h.advance(750);
+  h.turn.busy = false; h.advance(1000);
+  assert.equal(doc.title, '⏳ My chat');
+  h.advance(1000);
+  assert.equal(doc.title, 'My chat');
+  h.context.run = { autosend: true }; h.check();
+  assert.equal(doc.title, '⏳ My chat');
+});
 test('ChatGPT chimes once for a loaded successful generation without retries, never for historical images', () => {
   const h = harness();
   h.turn.images = [{ complete: true, naturalWidth: 100 }];

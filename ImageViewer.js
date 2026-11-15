@@ -844,6 +844,7 @@
         let unreadGeneration = false;
         let unreadImageTurn = null;
         let generationFinished = false;
+        let lastBusyAt = -Infinity;
         let baseTitle = document.title;
         let writtenTitle = null;
         function generatedImageInView() {
@@ -867,7 +868,12 @@
             if (!document.hidden && (unreadGeneration === 'failed' || (unreadGeneration && generatedImageInView()))) {
                 unreadGeneration = false;
             }
-            const generating = !generationFinished && (busy(latest()) || (run && !run.autosend));
+            const now = Date.now();
+            if (generationFinished || destroyed || identity() !== soundConversation) lastBusyAt = -Infinity;
+            else if (busy(latest())) lastBusyAt = now;
+            // ChatGPT briefly removes its generation markers between stages.
+            // The existing refresh loop clears this after a sustained idle period.
+            const generating = !generationFinished && (run || now - lastBusyAt < 2000);
             const prefix = destroyed ? '' : run?.paused ? '⏸️ ' : generating ? '⏳ ' : unreadGeneration === 'failed' ? '❌ ' : unreadGeneration ? '✅ ' : '';
             writtenTitle = prefix + baseTitle;
             if (document.title !== writtenTitle) document.title = writtenTitle;
@@ -1035,6 +1041,7 @@
             setRetryButtonActive(button, false);
             setRetryButtonActive(autosendButton, false);
             run = null;
+            lastBusyAt = -Infinity;
             button.textContent = 'Retry image';
             autosendButton.textContent = 'Draw when ready';
             status.textContent = message;
