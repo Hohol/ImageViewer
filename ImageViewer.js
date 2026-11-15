@@ -1324,7 +1324,7 @@
                 check(session);
                 automaticClick = true;
                 try {
-                    input.focus();
+                    input.focus({ preventScroll: true });
                     if (input instanceof HTMLTextAreaElement) {
                         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'd');
                         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1797,10 +1797,14 @@
             const removed = new Set(order.slice(index));
             const currentTurnIndex = turnOrder.indexOf(edit.key);
             if (currentTurnIndex >= 0) for (const key of turnOrder.slice(currentTurnIndex)) removed.add(key);
+            const removedImages = new Set();
             // Old DOM can remain mounted briefly after Send. Ignore those nodes until
             // they are replaced, while allowing new message IDs in a reused edit turn.
             for (const item of items) {
-                if (removed.has(item.turn)) discardedImages.set(item.img, item.key);
+                if (removed.has(item.turn)) {
+                    discardedImages.set(item.img, item.key);
+                    removedImages.add(item.key);
+                }
             }
             for (const turn of timeline()?.querySelectorAll(turnSelector) || []) {
                 const key = turnKey(turn);
@@ -1814,6 +1818,7 @@
             let count = 0;
             for (const [key, record] of records) {
                 if (!removed.has(record.turn)) continue;
+                removedImages.add(key);
                 if (record.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
                 records.delete(key);
                 count++;
@@ -1823,9 +1828,15 @@
             mergeTurns(retained);
             for (const key of removed) turnPositions.delete(key);
             knownEnds.clear();
-            if (overlay) clearOverlay();
-            imgs = [];
-            currentIndex = -1;
+            const selected = imgs[currentIndex];
+            if (overlay && selected && imageKeys.has(selected) && !removedImages.has(imageKeys.get(selected))) {
+                imgs = imgs.filter(img => imageKeys.has(img) && !removedImages.has(imageKeys.get(img)));
+                currentIndex = imgs.indexOf(selected);
+            } else {
+                if (overlay) clearOverlay();
+                imgs = [];
+                currentIndex = -1;
+            }
             log('branch-discarded', { turn: edit.key, turns: removed.size, images: count });
             scheduleCapture();
         }

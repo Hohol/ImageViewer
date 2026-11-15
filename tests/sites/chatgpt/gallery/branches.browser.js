@@ -23,6 +23,11 @@
   await gallery.scan();
   check(keys().length === 8, 'full scan starts with eight cached images');
   const initial = gallery.images().map(img => img.src);
+  overlay = document.createElement('div');
+  const openGallery = overlay;
+  imgs = gallery.images();
+  const selected = imgs[2];
+  currentIndex = 2;
   setDistance(900);
   render();
   await sleep(80);
@@ -37,8 +42,11 @@
   main.click();
   main.remove();
   check(keys().length === 8, 'main composer Send preserves earlier conversation');
+  check(overlay === openGallery && imgs[currentIndex] === selected, 'main composer Send preserves the open gallery');
 
   editor(4).send();
+  check(overlay === openGallery && imgs[currentIndex] === selected && imgs.length === 4,
+    'edit submission keeps an unaffected image open and drops the discarded suffix from navigation');
   check(keys().join(',') === 'turn-0,turn-1,turn-2,turn-3', 'edit submit immediately discards edited turn and cached suffix');
   await sleep(130);
   check(keys().join(',') === 'turn-0,turn-1,turn-2,turn-3', 'lingering old DOM cannot repopulate cache');
@@ -60,7 +68,10 @@
   form.onsubmit = event => event.preventDefault();
   turn.append(form);
   form.firstChild.focus();
+  imgs = gallery.images();
+  currentIndex = 4;
   form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  check(!overlay, 'edit submission closes the gallery if it discards the selected image');
   check(keys().join(',') === 'turn-0,turn-1,turn-2,turn-3', 'user editor focus and form submission trim the branch');
 
   // Gate an old image fetch across submission to expose stale async writes.
