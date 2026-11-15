@@ -716,6 +716,9 @@
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
     const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
     const CHATGPT_TRACE_RETRY_POSITION = false; // Show the button while collecting retry diagnostics.
+    const CHATGPT_TRACE_GALLERY_CACHE = true; // Temporary diagnostics for passive capture during retries.
+    const CHATGPT_TRACE_IMAGE_NOTIFICATIONS = true;
+    const galleryCacheTraceKey = 'iv-chatgpt-gallery-cache-log';
     function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
         if (!isChatGPTHost()) return null;
         const turnSelector = '[data-turn-key]';
@@ -748,16 +751,22 @@
         }
         const debugButton = button.cloneNode(true);
         debugButton.textContent = 'Debug log';
-        const showDebugButton = CHATGPT_SHOW_DEBUG_LOG || CHATGPT_TRACE_RETRY_POSITION;
+        const showDebugButton = CHATGPT_SHOW_DEBUG_LOG || CHATGPT_TRACE_RETRY_POSITION ||
+            CHATGPT_TRACE_GALLERY_CACHE || CHATGPT_TRACE_IMAGE_NOTIFICATIONS;
         const retryPositionStorageKey = 'iv-chatgpt-retry-position-log';
+        const imageNotificationTraceKey = 'iv-chatgpt-image-notification-log';
         debugButton.hidden = !showDebugButton;
         if (!showDebugButton) debugButton.style.display = 'none';
         debugButton.style.gridRow = '4';
         debugButton.addEventListener('click', () => {
             let retryPosition = [];
+            let galleryCache = [];
+            let imageNotifications = [];
             try { retryPosition = JSON.parse(sessionStorage.getItem(retryPositionStorageKey) || '[]'); } catch (_) {}
+            try { galleryCache = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey) || '[]'); } catch (_) {}
+            try { imageNotifications = JSON.parse(sessionStorage.getItem(imageNotificationTraceKey) || '[]'); } catch (_) {}
             const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(),
-                events: debugEvents, retryPosition }, null, 2)], { type: 'application/json' });
+                events: debugEvents, retryPosition, galleryCache, imageNotifications }, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
@@ -815,11 +824,10 @@
         const key = (turn) => turn?.getAttribute('data-turn-key');
         const state = (turn) => turn?.querySelector('[data-talvt-turn-state]')?.getAttribute('data-talvt-turn-state');
         const stopSelector = 'button[aria-label="Stop"], button[data-testid="stop-button"]';
-        // After edit/send, ChatGPT can leave the turn marked complete for several
-        // seconds even though the composer already exposes its Stop control.
-        const busy = (turn) => state(turn) === 'in_progress' ||
-            !!turn?.querySelector('[data-talvt-turn-state="in_progress"], [data-testid="image-gen-loading-game-board"]') ||
-            !!composer()?.querySelector(stopSelector);
+        const turnGenerating = (turn) => state(turn) === 'in_progress' ||
+            !!turn?.querySelector('[data-talvt-turn-state="in_progress"], [data-testid="image-gen-loading-game-board"]');
+        // Retry control also needs to see generation before ChatGPT updates the turn.
+        const busy = (turn) => turnGenerating(turn) || !!composer()?.querySelector(stopSelector);
         const prompt = (turn) => turn?.querySelector('[data-user-message-bubble]')?.textContent || '';
         const editButton = (turn) => turn?.querySelector('button[aria-label="Edit message"]');
         const namedButton = (turn, name) => Array.from(turn?.querySelectorAll('button') || [])
@@ -881,6 +889,39 @@
         let preEditImageSources = new Set();
         let preEditTurn;
         const notificationImageSource = img => img.currentSrc || img.src || '';
+        function traceImageNotification(event, turn, candidates) {
+            if (typeof CHATGPT_TRACE_IMAGE_NOTIFICATIONS === 'undefined' || !CHATGPT_TRACE_IMAGE_NOTIFICATIONS) return;
+            try {
+                // Compare sources across remounts without exporting image URLs.
+                const sourceFingerprint = src => {
+                    if (!src) return null;
+                    let hash = 2166136261;
+                    for (let i = 0; i < src.length; i++) hash = Math.imul(hash ^ src.charCodeAt(i), 16777619);
+                    return (hash >>> 0).toString(16);
+                };
+                const entries = JSON.parse(sessionStorage.getItem(imageNotificationTraceKey) || '[]');
+                entries.push({
+                    time: new Date().toISOString(), event, turn: key(turn), editedTurn: preEditTurn,
+                    responseIds: responseIds(turn), state: state(turn), busy: busy(turn),
+                    hidden: document.hidden, audioState: audioContext?.state,
+                    preEditSources: [...preEditImageSources].map(sourceFingerprint),
+                    images: candidates.slice(0, 30).map(img => {
+                        const src = notificationImageSource(img);
+                        const message = img.closest?.('[data-chatgpt-search-message-ids], [data-message-id]');
+                        return {
+                            source: sourceFingerprint(src),
+                            messageIds: message?.getAttribute('data-chatgpt-search-message-ids'),
+                            messageId: message?.getAttribute('data-message-id'),
+                            complete: img.complete, width: img.naturalWidth,
+                            presentBeforeEdit: preEditImageSources.has(src),
+                            previouslyNotified: soundedImages.get(img) === src,
+                            seenWhileIdle: idleImages.get(img) === src,
+                        };
+                    }),
+                });
+                sessionStorage.setItem(imageNotificationTraceKey, JSON.stringify(entries.slice(-100)));
+            } catch (_) {} // Diagnostics must not interfere with notifications.
+        }
         function rememberPreEditImages(turn) {
             const turnKey = key(turn);
             if (preEditTurn !== turnKey) preEditImageSources.clear();
@@ -889,6 +930,7 @@
                 const src = notificationImageSource(img);
                 if (src) preEditImageSources.add(src);
             }
+            traceImageNotification('edit-baseline', turn, images(turn));
         }
         function unlockSound(event) {
             if (!event.isTrusted || destroyed) return;
@@ -944,7 +986,8 @@
                 !img.closest?.('[data-testid="image-gen-loading-game-board"]'));
             if (generationFinished && loaded.length &&
                 loaded.every(img => soundedImages.get(img) === notificationImageSource(img))) return;
-            if (busy(turn)) {
+            // The composer Stop button can belong to a newer, unmounted turn.
+            if (turnGenerating(turn)) {
                 if (!soundedResponses.has(token) && pendingSound !== token) {
                     pendingSound = token;
                     generationFinished = false;
@@ -966,6 +1009,7 @@
                 updateGenerationTitle();
                 return;
             }
+            traceImageNotification('image-success', turn, loaded);
             for (const img of loaded) soundedImages.set(img, notificationImageSource(img));
             unreadGeneration = true;
             unreadImageTurn = key(turn);
@@ -1523,6 +1567,15 @@
 
     function createChatGPTGallery(cacheOnly = () => false) {
         if (!isChatGPTHost()) return null;
+        const traceGalleryCache = typeof CHATGPT_TRACE_GALLERY_CACHE !== 'undefined' && CHATGPT_TRACE_GALLERY_CACHE;
+        function traceCache(event, detail) {
+            if (!traceGalleryCache) return;
+            try {
+                const events = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey) || '[]');
+                events.push({ time: new Date().toISOString(), event, cacheOnly: cacheOnly(), ...detail });
+                sessionStorage.setItem(galleryCacheTraceKey, JSON.stringify(events.slice(-200)));
+            } catch (_) {}
+        }
         const timelineSelector = '[data-app-action-timeline-scroll]';
         const turnSelector = '[data-turn-key], [data-testid^="conversation-turn-"]';
         const records = new Map();
@@ -1864,11 +1917,13 @@
                 if (record.url) URL.revokeObjectURL(record.url);
                 bytes += blob.size - record.size;
                 Object.assign(record, { url, size: blob.size, pixels, failed: false });
+                traceCache('stored', { key: item.key, bytes: blob.size, connected: img.isConnected });
                 record.image.src = url;
                 record.image.alt = 'Chat image';
             } catch (e) {
                 if (epoch === generation && !session.cancelled) {
                     record.failed = true;
+                    traceCache('copy-failed', { key: item.key, reason: e.name, connected: img.isConnected });
                     log('image-unavailable', { reason: e.name || 'Error' });
                 }
             } finally {
@@ -1891,9 +1946,15 @@
                 if (record.url) available.set(record.key, { ...record, img: record.image });
             }
             const ranks = new Map(turnOrder.map((key, i) => [key, i]));
-            return [...available.values()].sort((a, b) =>
+            const ordered = [...available.values()].sort((a, b) =>
                 (ranks.get(a.turn) ?? Infinity) - (ranks.get(b.turn) ?? Infinity) || a.order - b.order,
-            ).map((item) => item.img);
+            );
+            if (typeof traceGalleryCache !== 'undefined' && traceGalleryCache) traceCache('gallery-list', {
+                keys: ordered.map(item => item.key),
+                unavailable: [...records.values()].filter(record => !available.has(record.key)).slice(-40)
+                    .map(record => ({ key: record.key, pending: !!record.pending, failed: !!record.failed })),
+            });
+            return ordered.map((item) => item.img);
         }
 
         function nearestImage() {
@@ -2379,8 +2440,25 @@
         function captureMounted() {
             const id = syncConversation();
             observeTimeline();
-            if (!id || passive.cancelled || (run && !run.cancelled)) return;
-            for (const item of mounted()) void preserve(item, passive);
+            if (!id || passive.cancelled || (run && !run.cancelled)) {
+                traceCache('capture-skipped', { conversationDetected: !!id, passiveCancelled: passive.cancelled,
+                    galleryWorkActive: !!run && !run.cancelled });
+                return;
+            }
+            const items = mounted();
+            if (traceGalleryCache) {
+                const root = observedRoot;
+                const accepted = new Set(items.map(item => item.img));
+                traceCache('capture', {
+                    top: root?.scrollTop, height: root?.scrollHeight, viewport: root?.clientHeight,
+                    candidates: Array.from(root?.querySelectorAll('img') || []).slice(-60).map(img => ({
+                        key: imageKeys.get(img), turn: img.closest(turnSelector)?.getAttribute('data-turn-key'),
+                        accepted: accepted.has(img), excluded: isExcludedImage(img),
+                        complete: img.complete, width: img.naturalWidth,
+                    })),
+                });
+            }
+            for (const item of items) void preserve(item, passive);
         }
 
         function scheduleCapture() {

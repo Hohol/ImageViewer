@@ -14,7 +14,8 @@ function harness() {
   }
   const context = vm.createContext({ window: { AudioContext, innerWidth: 1000, innerHeight: 800 }, destroyed: false, run: null,
     identity: () => chat, latest: () => turn, responseIds: t => t.response, key: t => t.id,
-    busy: t => t.busy, state: t => t.state, images: t => t.images.map(img => {
+    busy: t => t.busy || t.composerStop, turnGenerating: t => t.busy || t.state === 'in_progress',
+    state: t => t.state, images: t => t.images.map(img => {
       img.getBoundingClientRect ||= () => ({ left: 10, right: 110, top: 10, bottom: 110, width: 100, height: 100 });
       return img;
     }),
@@ -92,6 +93,17 @@ test('a different completed response cannot consume a pending sound', () => {
   h.turn.busy = true; h.check();
   h.turn.response = 'different'; h.turn.busy = false;
   h.turn.images = [{ complete: true, naturalWidth: 1024 }]; h.check();
+  assert.equal(h.tones(), 0);
+});
+
+test('the composer Stop button cannot arm an alert for a remounted historical image', () => {
+  const h = harness();
+  h.turn.composerStop = true;
+  h.turn.images = [{ src: 'old-image', complete: true, naturalWidth: 1122 }];
+  h.check();
+  assert.equal(h.tones(), 0);
+  h.turn.composerStop = false;
+  h.check();
   assert.equal(h.tones(), 0);
 });
 
