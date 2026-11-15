@@ -1424,6 +1424,7 @@
             const turn = item?.closest(turnSelector);
             if (turn && item.matches('button[aria-label="Edit message"]')) rememberPreEditImages(turn);
             if (item && isPromptSend(item)) { manualSubmission(item); return; }
+            if (item?.matches('button[aria-label="Copy message"], button[data-testid="copy-turn-action"]')) return;
             // ChatGPT can open uploaded images in its own preview, outside our gallery.
             if (item?.matches('button[type="button"][aria-label="User attachment"]') && item.querySelector('img')) return;
             if (run && item && (item.closest(turnSelector) || /send|stop/i.test(item.getAttribute('aria-label') || '') ||

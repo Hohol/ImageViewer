@@ -35,7 +35,7 @@ test('active controls block scans, uncached navigation, and scroll writes', asyn
   assert.equal(root.scrollTop, 200);
 });
 
-test('gallery clicks preserve automation, while normal message controls still stop it', () => {
+test('gallery and Copy message clicks preserve automation, while other message controls still stop it', () => {
   const controls = readSection('chatgpt/retries');
   let handler, stopped = 0;
   const c = vm.createContext({ document: { addEventListener: (type, fn) => { handler = fn; } },
@@ -47,6 +47,8 @@ test('gallery clicks preserve automation, while normal message controls still st
   const button = { closest: () => ({}), getAttribute: () => '', matches: () => false };
   handler({ isTrusted: true, button: 0, target: { image: true, closest: () => button } });
   handler({ isTrusted: true, button: 0, target: { overlay: true } });
+  const copyButton = { ...button, matches: selector => selector.includes('[aria-label="Copy message"]') };
+  handler({ isTrusted: true, button: 0, target: { closest: () => copyButton } });
   assert.equal(stopped, 0);
   handler({ isTrusted: true, button: 0, target: { closest: () => button } });
   assert.equal(stopped, 1);
