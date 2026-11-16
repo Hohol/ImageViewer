@@ -35,3 +35,23 @@ test('a local chat can identify its gallery through the visible composer outside
   vm.runInContext(block, context);
   assert.equal(vm.runInContext('conversationId()', context), 'local-chatgpt:current');
 });
+
+test('a saved URL keeps the same local chat cache, but a different saved chat blocks its outgoing DOM', () => {
+  let id = 'local-chatgpt:current';
+  const resets = [];
+  const context = vm.createContext({
+    location: { pathname: '/' }, conversationPath: '/', conversation: id,
+    pageHidden: false, departedConversation: null, conversationId: () => id,
+    reset: reason => resets.push(reason),
+  });
+  vm.runInContext(source.slice(source.indexOf('        function syncConversation()'),
+    source.indexOf('        function mergeTurns(')), context);
+  context.location.pathname = '/c/saved';
+  assert.equal(context.syncConversation(), id);
+  assert.deepEqual(resets, []);
+  context.location.pathname = '/c/other';
+  assert.equal(context.syncConversation(), null);
+  assert.deepEqual(resets, ['page-navigation']);
+  id = 'other';
+  assert.equal(context.syncConversation(), 'other');
+});

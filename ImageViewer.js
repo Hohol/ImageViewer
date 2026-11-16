@@ -716,7 +716,7 @@
     const CHATGPT_RETRY_ATTEMPTS = 10; // Maximum additional image-generation attempts.
     const CHATGPT_SHOW_DEBUG_LOG = false; // Show the downloadable debug log button.
     const CHATGPT_TRACE_RETRY_POSITION = false; // Show the button while collecting retry diagnostics.
-    const CHATGPT_TRACE_GALLERY_CACHE = false; // Temporary diagnostics for passive capture during retries.
+    const CHATGPT_TRACE_GALLERY_CACHE = true; // Temporary diagnostics for passive capture during retries.
     const CHATGPT_TRACE_IMAGE_NOTIFICATIONS = false;
     const galleryCacheTraceKey = 'iv-chatgpt-gallery-cache-log';
     function createChatGPTControls(attemptLimit = CHATGPT_RETRY_ATTEMPTS) {
@@ -1663,17 +1663,24 @@
 
         function syncConversation() {
             if (pageHidden) return null;
-            if (conversationPath !== location.pathname) {
-                departedConversation = conversation || departedConversation;
-                conversationPath = location.pathname;
-                reset('page-navigation');
-                conversation = null;
-            }
             const id = conversationId();
+            const routeId = location.pathname.match(/\/c\/([^/]+)/)?.[1];
+            if (conversationPath !== location.pathname) {
+                const previousRouteId = conversationPath.match(/\/c\/([^/]+)/)?.[1];
+                // A local chat can acquire a saved URL before its DOM ID changes.
+                // Treat that as the same chat while its local identity is stable.
+                const sameLocalChat = id === conversation && id?.startsWith('local-chatgpt:') &&
+                    routeId && (!previousRouteId || previousRouteId === routeId);
+                conversationPath = location.pathname;
+                if (!sameLocalChat) {
+                    departedConversation = conversation || departedConversation;
+                    reset('page-navigation');
+                    conversation = null;
+                }
+            }
             // SPA routes change before the old conversation DOM is removed.
             // Do not repopulate the released cache from that outgoing timeline.
-            if (departedConversation && id === departedConversation &&
-                location.pathname.match(/\/c\/([^/]+)/)?.[1] !== id) return null;
+            if (departedConversation && id === departedConversation && routeId !== id) return null;
             if (id) departedConversation = null;
             if (id !== conversation) {
                 reset();
@@ -1833,9 +1840,11 @@
             passive = newPassiveSession();
             generation++;
             let count = 0;
+            const removedRecords = traceGalleryCache ? [] : null;
             for (const [key, record] of records) {
                 if (!removed.has(record.turn)) continue;
                 removedImages.add(key);
+                removedRecords?.push({ key, turn: record.turn, cached: !!record.url, pending: !!record.pending });
                 if (record.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
                 records.delete(key);
                 count++;
@@ -1855,6 +1864,9 @@
                 currentIndex = -1;
             }
             log('branch-discarded', { turn: edit.key, turns: removed.size, images: count });
+            if (removedRecords) traceCache('branch-discarded', {
+                editedTurn: edit.key, removedTurns: [...removed], removedRecords,
+            });
             scheduleCapture();
         }
 
@@ -2469,8 +2481,17 @@
             const id = syncConversation();
             observeTimeline();
             if (!id || passive.cancelled || (run && !run.cancelled)) {
-                traceCache('capture-skipped', { conversationDetected: !!id, passiveCancelled: passive.cancelled,
-                    galleryWorkActive: !!run && !run.cancelled });
+                if (traceGalleryCache) {
+                    const detectedId = conversationId();
+                    traceCache('capture-skipped', {
+                        conversationDetected: !!id, detectedId, conversation, departedConversation, pageHidden,
+                        hasConversationRoute: /\/c\/[^/]+/.test(location.pathname),
+                        blockedByDeparture: !!detectedId && detectedId === departedConversation &&
+                            location.pathname.match(/\/c\/([^/]+)/)?.[1] !== detectedId,
+                        timelinePresent: !!observedRoot, passiveCancelled: passive.cancelled,
+                        galleryWorkActive: !!run && !run.cancelled,
+                    });
+                }
                 return;
             }
             const items = mounted();
