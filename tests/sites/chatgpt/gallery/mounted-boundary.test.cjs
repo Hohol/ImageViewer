@@ -67,6 +67,8 @@ test('remembered bottom survives older chunks and remounts, but new content inva
     let turnOrder = ['last'];
     let visibleEnd = true;
     const mountedBoundary = (root, key, direction) => visibleEnd && direction === 1;
+    const persistFirstImage = () => {};
+    ${extract('        function rememberEnd(', '        function saveCachedImage(')}
     ${extract('        function mergeTurns(', '        function mounted(')}
     ${extract('        function rememberMountedEnds(', '        function rememberEditedTurn(')}
     return { knownEnds, records, mergeTurns, rememberMountedEnds,

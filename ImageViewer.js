@@ -1603,6 +1603,127 @@
         let run = null;
         let passive = newPassiveSession();
         const maxBytes = 512 * 1024 * 1024;
+        let cacheDatabase;
+        let diskLoad;
+        const firstImageMarker = 'first-image';
+        function openCacheDatabase() {
+            return cacheDatabase ??= new Promise(resolve => {
+                if (typeof indexedDB === 'undefined') { resolve(null); return; }
+                try {
+                    const request = indexedDB.open('imageviewer-chatgpt-gallery', 1);
+                    request.onupgradeneeded = () => {
+                        const store = request.result.createObjectStore('images', { keyPath: ['chat', 'key'] });
+                        store.createIndex('chat', 'chat');
+                        store.createIndex('age', ['savedAt', 'size']);
+                    };
+                    request.onsuccess = () => {
+                        request.result.onversionchange = () => request.result.close();
+                        resolve(request.result);
+                    };
+                    request.onerror = () => resolve(null);
+                } catch (_) { resolve(null); }
+            });
+        }
+
+        async function withDiskCache(mode, action) {
+            try {
+                const db = await openCacheDatabase();
+                if (db) action(db.transaction('images', mode).objectStore('images'));
+            } catch (_) { /* The in-memory gallery still works when storage is unavailable. */ }
+        }
+
+        function savedChatId() {
+            if (conversationPath !== location.pathname) return null;
+            const routeId = conversationPath.match(/\/c\/([^/]+)/)?.[1];
+            return conversation && (conversation === routeId || conversation.startsWith('local-chatgpt:')) ? routeId : null;
+        }
+
+        function persistFirstImage(key) {
+            const chat = savedChatId();
+            if (!chat) return;
+            void withDiskCache('readwrite', store => {
+                if (key) store.put({ chat, key: firstImageMarker, imageKey: key, turn: JSON.parse(key)[0] });
+                else store.delete([chat, firstImageMarker]);
+            });
+        }
+
+        function rememberEnd(direction, key) {
+            if (knownEnds.get(direction) === key) return;
+            knownEnds.set(direction, key);
+            if (direction < 0) persistFirstImage(key);
+        }
+
+        function forgetEnd(direction) {
+            if (knownEnds.delete(direction) && direction < 0) persistFirstImage(null);
+        }
+
+        function saveCachedImage(chat, record, blob) {
+            const { key, turn, order, position, pixels, size } = record;
+            const turnPosition = turnPositions.get(turn);
+            void withDiskCache('readwrite', store => {
+                store.put({ chat, key, turn, order, position, turnPosition, pixels, size, blob, savedAt: Date.now() });
+                // Sum indexed sizes without loading any image data, then evict the oldest copies.
+                const index = store.index('age');
+                const request = index.openKeyCursor(null, 'prev');
+                let total = 0;
+                request.onsuccess = () => {
+                    const cursor = request.result;
+                    if (!cursor) return;
+                    total += cursor.key[1];
+                    if (total > maxBytes) store.delete(cursor.primaryKey);
+                    cursor.continue();
+                };
+            });
+        }
+
+        function restoreCachedImages() {
+            const chat = savedChatId();
+            if (!chat || diskLoad?.chat === chat) return;
+            const load = diskLoad = { chat, pending: true };
+            const epoch = generation;
+            if (knownEnds.has(-1)) persistFirstImage(knownEnds.get(-1));
+            for (const record of records.values()) {
+                if (!record.unsavedBlob) continue;
+                saveCachedImage(chat, record, record.unsavedBlob);
+                delete record.unsavedBlob;
+            }
+            void withDiskCache('readonly', store => {
+                const request = store.index('chat').getAll(chat);
+                request.onerror = () => { load.pending = false; };
+                request.onsuccess = () => {
+                    load.pending = false;
+                    if (epoch !== generation || savedChatId() !== chat) return;
+                    const restoredTurns = new Set();
+                    let firstImage;
+                    for (const entry of request.result) {
+                        if (entry.key === firstImageMarker) {
+                            firstImage = entry.imageKey;
+                            continue;
+                        }
+                        const current = records.get(entry.key);
+                        if (current?.url || current?.pending || bytes + entry.size > maxBytes) continue;
+                        const image = current?.image || document.createElement('img');
+                        const url = URL.createObjectURL(entry.blob);
+                        image.src = url;
+                        image.alt = 'Chat image';
+                        imageKeys.set(image, entry.key);
+                        const { key, turn, order, position, pixels, size } = entry;
+                        records.set(key, { key, turn, order, position, pixels, size, image, url });
+                        bytes += size;
+                        if (!turnPositions.has(turn)) turnPositions.set(turn, entry.turnPosition);
+                        restoredTurns.add(turn);
+                    }
+                    mergeTurns([...restoredTurns].sort((a, b) => turnPositions.get(b) - turnPositions.get(a)));
+                    if (!knownEnds.has(-1) && records.get(firstImage)?.url) {
+                        const firstTurn = records.get(firstImage).turn;
+                        const firstIndex = turnOrder.indexOf(firstTurn);
+                        const firstOrder = records.get(firstImage).order;
+                        if (![...records.values()].some(record => record.turn === firstTurn ? record.order < firstOrder :
+                            turnOrder.indexOf(record.turn) < firstIndex)) knownEnds.set(-1, firstImage);
+                    }
+                };
+            });
+        }
         const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const turnKey = (turn) => turn.getAttribute('data-turn-key') || turn.getAttribute('data-testid');
         const timeline = () => Array.from(document.querySelectorAll(timelineSelector)).find(root => {
@@ -1634,6 +1755,7 @@
         }
 
         function reset(reason = 'conversation-change') {
+            diskLoad = null;
             editingTurn = null;
             discardedTurns = new WeakMap();
             discardedImages = new WeakMap();
@@ -1706,7 +1828,7 @@
                 for (const [direction, endKey] of knownEnds) {
                     const endTurn = JSON.parse(endKey)[0];
                     if ((turnOrder.indexOf(key) - turnOrder.indexOf(endTurn)) * direction > 0) {
-                        knownEnds.delete(direction);
+                        forgetEnd(direction);
                     }
                 }
             }
@@ -1792,14 +1914,14 @@
             for (const [direction, endKey] of knownEnds) {
                 const end = items.find((item) => item.key === endKey) || records.get(endKey);
                 if (!end || items.some((item) => item.turn === end.turn &&
-                    (item.order - end.order) * direction > 0)) knownEnds.delete(direction);
+                    (item.order - end.order) * direction > 0)) forgetEnd(direction);
             }
             // Remember ends during passive capture, before the user scrolls away.
             // These are image identities, so recycled DOM nodes do not lose the evidence.
             for (const direction of [-1, 1]) {
                 const item = direction < 0 ? items[0] : items[items.length - 1];
                 if (item?.img.complete && item.img.naturalWidth && mountedBoundary(root, item.key, direction, items)) {
-                    knownEnds.set(direction, item.key);
+                    rememberEnd(direction, item.key);
                 }
             }
         }
@@ -1821,6 +1943,20 @@
             const removed = new Set(order.slice(index));
             const currentTurnIndex = turnOrder.indexOf(edit.key);
             if (currentTurnIndex >= 0) for (const key of turnOrder.slice(currentTurnIndex)) removed.add(key);
+            const chat = savedChatId();
+            if (chat) {
+                // An edit can arrive before stored history has been restored.
+                const clearUnrestored = diskLoad?.chat !== chat || diskLoad.pending;
+                void withDiskCache('readwrite', store => {
+                    const request = store.index('chat').openCursor(chat);
+                    request.onsuccess = () => {
+                        const cursor = request.result;
+                        if (!cursor) return;
+                        if (clearUnrestored || removed.has(cursor.value.turn)) cursor.delete();
+                        cursor.continue();
+                    };
+                });
+            }
             const removedImages = new Set();
             // Old DOM can remain mounted briefly after Send. Ignore those nodes until
             // they are replaced, while allowing new message IDs in a reused edit turn.
@@ -1853,7 +1989,9 @@
             turnOrder = order.filter((key) => !removed.has(key));
             mergeTurns(retained);
             for (const key of removed) turnPositions.delete(key);
-            knownEnds.clear();
+            const first = knownEnds.get(-1);
+            if (first && removedImages.has(first)) forgetEnd(-1);
+            knownEnds.delete(1);
             const selected = imgs[currentIndex];
             if (overlay && selected && imageKeys.has(selected) && !removedImages.has(imageKeys.get(selected))) {
                 imgs = imgs.filter(img => imageKeys.has(img) && !removedImages.has(imageKeys.get(img)));
@@ -1878,7 +2016,7 @@
         document.addEventListener('click', (event) => {
             const button = event.target.closest?.('button');
             if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
-            if (button.matches('[data-testid="send-button"]')) knownEnds.clear();
+            if (button.matches('[data-testid="send-button"]')) knownEnds.delete(1);
             const turn = button.closest(turnSelector);
             if (button.getAttribute('aria-label') === 'Edit message') {
                 rememberEditedTurn(turn);
@@ -1897,7 +2035,7 @@
             rememberEditedTurn(event.target.closest(turnSelector));
         });
         document.addEventListener('submit', (event) => {
-            if (event.target.querySelector?.('[data-testid="send-button"]')) knownEnds.clear();
+            if (event.target.querySelector?.('[data-testid="send-button"]')) knownEnds.delete(1);
             if (isEditingTurn(event.target.closest?.(turnSelector))) discardEditedBranch();
         }, true);
 
@@ -1960,6 +2098,9 @@
                 traceCache('stored', { key: item.key, bytes: blob.size, connected: img.isConnected });
                 record.image.src = url;
                 record.image.alt = 'Chat image';
+                const chat = savedChatId();
+                if (chat) saveCachedImage(chat, record, blob);
+                else record.unsavedBlob = blob;
             } catch (e) {
                 if (epoch === generation && !session.cancelled) {
                     record.failed = true;
@@ -2183,7 +2324,7 @@
             };
             const previousOrder = turnOrder;
             session.previousOrder = previousOrder;
-            knownEnds.clear();
+            knownEnds.delete(1);
             turnOrder = [];
             run = session;
             const onVisibilityChange = () => {
@@ -2267,9 +2408,9 @@
                     if ([...session.seen].every((key) => records.get(key)?.url)) {
                         const list = images() || [];
                         if (list.length) {
-                            knownEnds.set(-1, imageKeys.get(list[0]));
+                            rememberEnd(-1, imageKeys.get(list[0]));
                             knownEnds.set(1, imageKeys.get(list[list.length - 1]));
-                        }
+                        } else forgetEnd(-1);
                     }
                 }
                 // Leave completed scans at the oldest turn, or cancelled scans where they stopped.
@@ -2446,7 +2587,7 @@
                         [...session.seen].every((seenKey) => records.get(seenKey)?.url);
                     if (found) hideViewerToast(loadingMessage);
                     else if (confirmedEnd) {
-                        knownEnds.set(direction, key);
+                        rememberEnd(direction, key);
                         hideViewerToast(loadingMessage);
                     } else showViewerToast(`Image search ${cancelled ? 'stopped' : 'incomplete'} · Press the arrow again to retry`, 4000);
                 }
@@ -2480,6 +2621,7 @@
         function captureMounted() {
             const id = syncConversation();
             observeTimeline();
+            if (id) restoreCachedImages();
             if (!id || passive.cancelled || (run && !run.cancelled)) {
                 if (traceGalleryCache) {
                     const detectedId = conversationId();
