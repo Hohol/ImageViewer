@@ -1135,6 +1135,14 @@
             while (true) {
                 check(session);
                 if (!targetMounted(session)) {
+                    if (Date.now() < session.initialScrollUntil) {
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                        continue;
+                    }
+                    if (session.initialScrollUntil) {
+                        delete session.initialScrollUntil;
+                        status.textContent = '';
+                    }
                     if (pausedAt === null) {
                         pausedAt = Date.now();
                         previousStatus = status.textContent;
@@ -1150,6 +1158,10 @@
                     }
                     await new Promise(resolve => setTimeout(resolve, 250));
                     continue;
+                }
+                if (session.initialScrollUntil) {
+                    delete session.initialScrollUntil;
+                    status.textContent = '';
                 }
                 if (pausedAt !== null) {
                     session.pausedMs = (session.pausedMs || 0) + Date.now() - pausedAt;
@@ -1307,8 +1319,24 @@
             recordRetryPosition('queued-draw', session);
             autosendButton.textContent = 'Cancel queued draw';
             setRetryButtonActive(autosendButton, true);
-            void autosend(session);
+            void startQueuedDraw(session);
         });
+        async function startQueuedDraw(session) {
+            const root = timeline();
+            if (!latestPosition(root, latest()).atLatest) {
+                status.textContent = 'Going to the latest message…';
+                session.initialScrollUntil = Date.now() + 2000;
+                if (root) {
+                    const reverse = getComputedStyle(root).flexDirection === 'column-reverse';
+                    root.scrollTo({ top: reverse ? 0 : root.scrollHeight, behavior: 'instant' });
+                }
+                // Give the virtualized transcript time to replace the older turns
+                // before binding the queued draw to the last mounted turn.
+                await new Promise(resolve => setTimeout(resolve, 250));
+                if (run !== session) return;
+            }
+            await autosend(session);
+        }
         async function autosend(session) {
             try {
                 let completedAt = 0;

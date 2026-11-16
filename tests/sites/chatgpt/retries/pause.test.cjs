@@ -4,6 +4,35 @@ const vm = require('node:vm');
 const { readSection } = require('../../../support/source.cjs');
 const source = readSection('chatgpt/retries');
 const block = source.slice(source.indexOf('        const sessionTime ='), source.indexOf('        function click(session'));
+
+test('queued draw jumps to the bottom and waits for its turn without briefly pausing', async () => {
+  for (const [direction, expectedTop] of [['column', 5000], ['column-reverse', 0]]) {
+    let now = 0, top;
+    const status = { textContent: '' };
+    const session = { autosend: true };
+    const current = { id: 'latest', querySelector: () => ({}) };
+    const root = { scrollHeight: 5000, scrollTo: options => { top = options.top; } };
+    const context = vm.createContext({
+      Date: { now: () => now }, status, run: session, check() {},
+      timeline: () => root, latest: () => now >= 750 ? current : null,
+      latestPosition: () => ({ atLatest: now >= 750 }), key: t => t.id,
+      getComputedStyle: () => ({ flexDirection: direction }),
+      setTimeout: fn => {
+        assert.equal(status.textContent, 'Going to the latest message…');
+        now += 250;
+        fn();
+      },
+    });
+    const start = source.indexOf('        async function startQueuedDraw(');
+    vm.runInContext(block + source.slice(start, source.indexOf('        async function autosend(', start)), context);
+    context.autosend = s => context.waitFor(s, () => true, 5000, 'timed out');
+    await context.startQueuedDraw(session);
+    assert.equal(top, expectedTop);
+    assert.equal(session.turnKey, 'latest');
+    assert.equal(session.paused, undefined);
+    assert.equal(status.textContent, '');
+  }
+});
 test('unloaded-target waits freeze timeout and preserve attempt status', async () => {
   let now = 0, mounted = false;
   const status = { textContent: 'Attempt 2/10 · Generating' };
