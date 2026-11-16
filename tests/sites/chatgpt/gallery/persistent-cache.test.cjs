@@ -12,13 +12,14 @@ test('a restored first image stops backward navigation and late reads cannot cro
     maxBytes: 1024, generation: 1, conversation: 'local-chatgpt:one',
     location: { pathname: '/c/saved' }, conversationPath: '/c/saved', bytes: 0, records,
     turnPositions: new Map(), imageKeys: new WeakMap(),
-    knownEnds: new Map(), turnOrder: ['turn'],
+    knownEnds: new Map(), turnOrder: ['turn'], run: null,
     document: { createElement: () => ({}) },
     URL: { createObjectURL: blob => 'blob:restored-' + blob },
     mergeTurns: () => {},
   });
   vm.runInContext(cache, context);
   context.withDiskCache = async (mode, action) => action({
+    put() {},
     index: () => ({
       getAll(chat) {
         assert.equal(chat, context.location.pathname.split('/').at(-1));
@@ -55,4 +56,39 @@ test('a restored first image stops backward navigation and late reads cannot cro
   Object.assign(request, { result: [{ ...entry, key: 'stale' }] });
   request.onsuccess();
   assert.equal(records.has('stale'), false);
+});
+
+test('legacy images survive while observed order replaces stale positions and persists', () => {
+  let request, savedOrder;
+  const records = new Map();
+  const context = vm.createContext({
+    maxBytes: 1024, generation: 1, conversation: 'saved', run: null,
+    location: { pathname: '/c/saved' }, conversationPath: '/c/saved', bytes: 0, records,
+    turnPositions: new Map(), imageKeys: new WeakMap(), knownEnds: new Map(), turnOrder: [],
+    document: { createElement: () => ({}) }, URL: { createObjectURL: blob => 'blob:' + blob },
+  });
+  vm.runInContext(cache + source.slice(source.indexOf('        function mergeTurns('),
+    source.indexOf('        function mounted()')), context);
+  context.withDiskCache = (mode, action) => action({
+    index: () => ({ getAll: () => request = {} }),
+    put: entry => { savedOrder = entry; },
+  });
+  const entries = ['older', 'latest'].map((turn, i) => ({
+    key: turn, turn, turnPosition: i * 100, order: 0, pixels: 100, size: 10, blob: turn,
+  }));
+  context.restoreCachedImages();
+  Object.assign(request, { result: entries });
+  request.onsuccess();
+  assert.deepEqual(Array.from(context.turnOrder), ['latest', 'older']);
+  context.observeTurnOrder(['older', 'latest'], true);
+  assert.deepEqual(Array.from(savedOrder.turns), ['older', 'latest']);
+  assert.equal(records.size, 2);
+  records.clear();
+  context.turnOrder = [];
+  vm.runInContext('diskLoad = null; observedTurns.clear(); savedOrderSignature = "";', context);
+  context.restoreCachedImages();
+  Object.assign(request, { result: [...entries, savedOrder] });
+  request.onsuccess();
+  assert.deepEqual(Array.from(context.turnOrder), ['older', 'latest']);
+  assert.equal(records.size, 2);
 });

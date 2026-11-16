@@ -1634,6 +1634,9 @@
         let cacheDatabase;
         let diskLoad;
         const firstImageMarker = 'first-image';
+        const turnOrderMarker = 'turn-order';
+        const observedTurns = new Set();
+        let savedOrderSignature = '';
         function openCacheDatabase() {
             return cacheDatabase ??= new Promise(resolve => {
                 if (typeof indexedDB === 'undefined') { resolve(null); return; }
@@ -1673,6 +1676,16 @@
                 if (key) store.put({ chat, key: firstImageMarker, imageKey: key, turn: JSON.parse(key)[0] });
                 else store.delete([chat, firstImageMarker]);
             });
+        }
+
+        function persistTurnOrder() {
+            const chat = savedChatId();
+            if (!chat || diskLoad?.chat !== chat || diskLoad.pending || run?.previousOrder) return;
+            const turns = turnOrder.filter(key => observedTurns.has(key));
+            const signature = JSON.stringify(turns);
+            if (signature === savedOrderSignature) return;
+            savedOrderSignature = signature;
+            void withDiskCache('readwrite', store => store.put({ chat, key: turnOrderMarker, turns }));
         }
 
         function rememberEnd(direction, key) {
@@ -1723,9 +1736,14 @@
                     if (epoch !== generation || savedChatId() !== chat) return;
                     const restoredTurns = new Set();
                     let firstImage;
+                    let savedTurns = [];
                     for (const entry of request.result) {
                         if (entry.key === firstImageMarker) {
                             firstImage = entry.imageKey;
+                            continue;
+                        }
+                        if (entry.key === turnOrderMarker) {
+                            savedTurns = entry.turns;
                             continue;
                         }
                         const current = records.get(entry.key);
@@ -1741,7 +1759,13 @@
                         if (!turnPositions.has(turn)) turnPositions.set(turn, entry.turnPosition);
                         restoredTurns.add(turn);
                     }
-                    mergeTurns([...restoredTurns].sort((a, b) => turnPositions.get(b) - turnPositions.get(a)));
+                    mergeTurns(savedTurns);
+                    for (const key of savedTurns) observedTurns.add(key);
+                    const approximate = [...restoredTurns].sort((a, b) => turnPositions.get(b) - turnPositions.get(a));
+                    // Legacy entries still appear in the gallery, but their positions
+                    // are only provisional until the transcript supplies their order.
+                    mergeTurns(approximate);
+                    persistTurnOrder();
                     if (!knownEnds.has(-1) && records.get(firstImage)?.url) {
                         const firstTurn = records.get(firstImage).turn;
                         const firstIndex = turnOrder.indexOf(firstTurn);
@@ -1784,6 +1808,8 @@
 
         function reset(reason = 'conversation-change') {
             diskLoad = null;
+            observedTurns.clear();
+            savedOrderSignature = '';
             editingTurn = null;
             discardedTurns = new WeakMap();
             discardedImages = new WeakMap();
@@ -1862,6 +1888,21 @@
             }
         }
 
+        function observeTurnOrder(keys, atBottom) {
+            mergeTurns(keys);
+            // Remounted turns can contradict the order inferred from old positions.
+            // Replace their slots in transcript order, leaving other turns in place.
+            const mountedKeys = new Set(keys);
+            let index = 0;
+            if (keys.length && atBottom) {
+                turnOrder = [...turnOrder.filter(key => !mountedKeys.has(key)), ...keys];
+            } else {
+                turnOrder = turnOrder.map(key => mountedKeys.has(key) ? keys[index++] : key);
+            }
+            for (const key of keys) observedTurns.add(key);
+            persistTurnOrder();
+        }
+
         function mounted() {
             const root = timeline();
             if (!root) return [];
@@ -1872,7 +1913,7 @@
             for (const turn of turns) {
                 turnPositions.set(turnKey(turn), distance - (turn.getBoundingClientRect().top - top));
             }
-            mergeTurns(turns.map(turnKey));
+            observeTurnOrder(turns.map(turnKey), distance <= 2);
             const result = [];
             for (const turn of turns) {
                 const slots = new Map();
@@ -1980,7 +2021,11 @@
                     request.onsuccess = () => {
                         const cursor = request.result;
                         if (!cursor) return;
-                        if (clearUnrestored || removed.has(cursor.value.turn)) cursor.delete();
+                        const entry = cursor.value;
+                        if (clearUnrestored || removed.has(entry.turn)) cursor.delete();
+                        else if (entry.key === turnOrderMarker) {
+                            cursor.update({ ...entry, turns: entry.turns.filter(key => !removed.has(key)) });
+                        }
                         cursor.continue();
                     };
                 });
@@ -2016,6 +2061,8 @@
             const retained = turnOrder.filter((key) => !removed.has(key));
             turnOrder = order.filter((key) => !removed.has(key));
             mergeTurns(retained);
+            for (const key of removed) observedTurns.delete(key);
+            persistTurnOrder();
             for (const key of removed) turnPositions.delete(key);
             const first = knownEnds.get(-1);
             if (first && removedImages.has(first)) forgetEnd(-1);
@@ -2181,6 +2228,12 @@
                 if (distance < bestDistance) { nearest = img; bestDistance = distance; }
             }
             return nearest;
+        }
+
+        function latestImageAtBottom() {
+            const root = timeline();
+            if (!root || fromBottom(root) > 2) return null;
+            return images()?.at(-1) || null;
         }
 
         function fromBottom(el) {
@@ -2718,7 +2771,7 @@
         window.addEventListener('pageshow', () => { pageHidden = false; scheduleCapture(); });
         captureMounted();
         return {
-            scan, cancel, images, findNext, nearestImage,
+            scan, cancel, images, findNext, nearestImage, latestImageAtBottom,
             debugSnapshot(selected, list) {
                 if (typeof CHATGPT_SHOW_DEBUG_LOG === 'undefined' || !CHATGPT_SHOW_DEBUG_LOG) return;
                 const rect = element => {
@@ -6959,7 +7012,8 @@
     }
 
     function pickGalleryHotkeyImage() {
-        return pickBestVisibleEligibleImage() || ivChatGPTGallery?.nearestImage() || pickNearestEligibleImage();
+        return ivChatGPTGallery?.latestImageAtBottom?.() || pickBestVisibleEligibleImage() ||
+            ivChatGPTGallery?.nearestImage() || pickNearestEligibleImage();
     }
 
     // Find the target video for keyboard controls

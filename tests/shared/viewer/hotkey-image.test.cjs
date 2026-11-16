@@ -56,3 +56,11 @@ test('visible selection and ChatGPT unloaded-history fallback remain intact', ()
   c.ivChatGPTGallery.nearestImage = () => null;
   assert.equal(c.pickGalleryHotkeyImage(), offscreen, 'empty cache falls back to mounted geometry');
 });
+
+test('at the bottom of ChatGPT, the gallery hotkey uses the last image in conversation order', () => {
+  const c = fixture();
+  const cached = {}, visible = image(300);
+  c.ivChatGPTGallery = { latestImageAtBottom: () => cached };
+  c.nodes = [visible];
+  assert.equal(c.pickGalleryHotkeyImage(), cached);
+});

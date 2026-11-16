@@ -26,7 +26,7 @@ test('two generated images keep distinct identities when messages are grouped an
   const context = { cacheOnly: () => false, timeline: () => root, turnSelector: '[data-turn-key]', turnKey: () => 'turn',
     discardedTurns: new WeakMap(), discardedImages: new WeakMap(), imageKeys: new WeakMap(),
     records: new Map(), turnPositions: new Map(), turnOrder: ['turn'], fromBottom: () => 0,
-    mergeTurns() {}, rememberMountedEnds() {}, isExcludedImage: () => false, syncConversation: () => true };
+    observeTurnOrder() {}, rememberMountedEnds() {}, isExcludedImage: () => false, syncConversation: () => true };
   vm.createContext(context);
   vm.runInContext(mounted + images, context);
   const cache = () => {
