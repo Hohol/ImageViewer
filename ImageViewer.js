@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.48
+// @version      2.49
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
@@ -761,12 +761,14 @@
         debugButton.addEventListener('click', () => {
             let retryPosition = [];
             let galleryCache = [];
+            let galleryRoutes = [];
             let imageNotifications = [];
             try { retryPosition = JSON.parse(sessionStorage.getItem(retryPositionStorageKey) || '[]'); } catch (_) {}
             try { galleryCache = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey) || '[]'); } catch (_) {}
+            try { galleryRoutes = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey + '-routes') || '[]'); } catch (_) {}
             try { imageNotifications = JSON.parse(sessionStorage.getItem(imageNotificationTraceKey) || '[]'); } catch (_) {}
             const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(),
-                events: debugEvents, retryPosition, galleryCache, imageNotifications }, null, 2)], { type: 'application/json' });
+                events: debugEvents, retryPosition, galleryCache, galleryRoutes, imageNotifications }, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
@@ -1603,12 +1605,12 @@
     function createChatGPTGallery(cacheOnly = () => false) {
         if (!isChatGPTHost()) return null;
         const traceGalleryCache = typeof CHATGPT_TRACE_GALLERY_CACHE !== 'undefined' && CHATGPT_TRACE_GALLERY_CACHE;
-        function traceCache(event, detail) {
+        function traceCache(event, detail, storageKey = galleryCacheTraceKey) {
             if (!traceGalleryCache) return;
             try {
-                const events = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey) || '[]');
+                const events = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
                 events.push({ time: new Date().toISOString(), event, cacheOnly: cacheOnly(), ...detail });
-                sessionStorage.setItem(galleryCacheTraceKey, JSON.stringify(events.slice(-200)));
+                sessionStorage.setItem(storageKey, JSON.stringify(events.slice(-200)));
             } catch (_) {}
         }
         const timelineSelector = '[data-app-action-timeline-scroll]';
@@ -1633,6 +1635,11 @@
         const maxBytes = 512 * 1024 * 1024;
         let cacheDatabase;
         let diskLoad;
+        function galleryRouteId(pathname) {
+            const id = pathname.match(/\/c\/([^/]+)/)?.[1];
+            try { return id ? decodeURIComponent(id) : null; }
+            catch (_) { return id; }
+        }
         const firstImageMarker = 'first-image';
         const turnOrderMarker = 'turn-order';
         const observedTurns = new Set();
@@ -1665,7 +1672,7 @@
 
         function savedChatId() {
             if (conversationPath !== location.pathname) return null;
-            const routeId = conversationPath.match(/\/c\/([^/]+)/)?.[1];
+            const routeId = galleryRouteId(conversationPath);
             return conversation && (conversation === routeId || conversation.startsWith('local-chatgpt:')) ? routeId : null;
         }
 
@@ -1786,7 +1793,7 @@
             const root = timeline();
             const id = root?.querySelector('[data-map-composer-conversation]')?.getAttribute('data-map-composer-conversation') ||
                 root?.querySelector('[data-chatgpt-selection-conversation-id]')?.getAttribute('data-chatgpt-selection-conversation-id') ||
-                location.pathname.match(/\/c\/([^/]+)/)?.[1];
+                galleryRouteId(location.pathname);
             if (id || !root) return id || null;
             // Local chats can place their composer outside the transcript and have no /c/ URL.
             const composer = Array.from(document.querySelectorAll('[data-map-composer-conversation]')).find(element => {
@@ -1837,16 +1844,36 @@
             currentIndex = -1;
         }
 
-        function syncConversation() {
+        let previousRouteTrace;
+        function traceGalleryRoute(id, blocked, sameLocalChat, source) {
+            if (!traceGalleryCache) return;
+            const root = timeline();
+            const pathname = location.pathname;
+            const previous = previousRouteTrace;
+            previousRouteTrace = { root, pathname, id, blocked };
+            if (previous && previous.root === root && previous.pathname === pathname &&
+                previous.id === id && previous.blocked === blocked) return;
+            const turns = root?.querySelectorAll(turnSelector);
+            traceCache('route-state', {
+                source, previousPath: previous?.pathname, pathname, previousId: previous?.id, detectedId: id,
+                timelineReused: previous?.root && root ? previous.root === root : null,
+                timelinePresent: !!root, firstTurn: turns?.length ? turnKey(turns[0]) : null,
+                lastTurn: turns?.length ? turnKey(turns[turns.length - 1]) : null,
+                departedConversation, blocked, sameLocalChat,
+            }, galleryCacheTraceKey + '-routes');
+        }
+
+        function syncConversation(source) {
             if (pageHidden) return null;
             const id = conversationId();
-            const routeId = location.pathname.match(/\/c\/([^/]+)/)?.[1];
+            const routeId = galleryRouteId(location.pathname);
+            let sameLocalChat = false;
             if (conversationPath !== location.pathname) {
-                const previousRouteId = conversationPath.match(/\/c\/([^/]+)/)?.[1];
+                const previousRouteId = galleryRouteId(conversationPath);
                 // A local chat can acquire a saved URL before its DOM ID changes.
                 // Treat that as the same chat while its local identity is stable.
-                const sameLocalChat = id === conversation && id?.startsWith('local-chatgpt:') &&
-                    routeId && (!previousRouteId || previousRouteId === routeId);
+                sameLocalChat = id === conversation && !!id?.startsWith('local-chatgpt:') &&
+                    !!routeId && (!previousRouteId || previousRouteId === routeId || previousRouteId === id);
                 conversationPath = location.pathname;
                 if (!sameLocalChat) {
                     departedConversation = conversation || departedConversation;
@@ -1856,7 +1883,9 @@
             }
             // SPA routes change before the old conversation DOM is removed.
             // Do not repopulate the released cache from that outgoing timeline.
-            if (departedConversation && id === departedConversation && routeId !== id) return null;
+            const blocked = !!departedConversation && id === departedConversation && routeId !== id;
+            if (typeof traceGalleryRoute === 'function') traceGalleryRoute(id, blocked, sameLocalChat, source);
+            if (blocked) return null;
             if (id) departedConversation = null;
             if (id !== conversation) {
                 reset();
@@ -2710,7 +2739,7 @@
                         conversationDetected: !!id, detectedId, conversation, departedConversation, pageHidden,
                         hasConversationRoute: /\/c\/[^/]+/.test(location.pathname),
                         blockedByDeparture: !!detectedId && detectedId === departedConversation &&
-                            location.pathname.match(/\/c\/([^/]+)/)?.[1] !== detectedId,
+                            galleryRouteId(location.pathname) !== detectedId,
                         timelinePresent: !!observedRoot, passiveCancelled: passive.cancelled,
                         galleryWorkActive: !!run && !run.cancelled,
                     });
@@ -2756,12 +2785,12 @@
             const original = history[method];
             history[method] = function (...args) {
                 const result = original.apply(this, args);
-                syncConversation();
+                syncConversation(method);
                 scheduleCapture();
                 return result;
             };
         }
-        window.addEventListener('popstate', () => { syncConversation(); scheduleCapture(); });
+        window.addEventListener('popstate', () => { syncConversation('popstate'); scheduleCapture(); });
         window.addEventListener('pagehide', () => {
             pageHidden = true;
             reset('pagehide'); conversation = null;
