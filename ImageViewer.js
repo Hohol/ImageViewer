@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.49
+// @version      2.50
+// @updateURL    https://raw.githubusercontent.com/Hohol/ImageViewer/main/ImageViewer.js
+// @downloadURL  https://raw.githubusercontent.com/Hohol/ImageViewer/main/ImageViewer.js
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
 // @match        *://chatgpt.com/*
 // @match        *://*.chatgpt.com/*
