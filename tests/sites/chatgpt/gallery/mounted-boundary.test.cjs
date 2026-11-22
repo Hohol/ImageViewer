@@ -30,6 +30,16 @@ test('complete mounted edges avoid searching even with text before/after the ima
   assert.equal(f.check(-1), true);
   assert.equal(f.check(1), true);
 });
+
+test('transcript wrappers do not hide a confirmed start, and pagination still blocks it', () => {
+  const f = fixture();
+  const wrapper = { parentElement: f.transcript };
+  f.extent.parentElement = wrapper;
+  f.transcript.children = [wrapper];
+  assert.equal(f.check(-1), true);
+  f.transcript.children.unshift({ hidden: false, getBoundingClientRect: () => ({ height: 20 }) });
+  assert.equal(f.check(-1), false);
+});
 test('virtual gaps and older-history pagination are not boundaries', () => {
   const f = fixture();
   f.block.getBoundingClientRect = () => ({ top: 300, bottom: 600, height: 300 });

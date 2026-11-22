@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.53
+// @version      2.54
 // @updateURL    https://raw.githubusercontent.com/Hohol/ImageViewer/main/ImageViewer.js
 // @downloadURL  https://raw.githubusercontent.com/Hohol/ImageViewer/main/ImageViewer.js
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
@@ -829,13 +829,18 @@
             let retryPosition = [];
             let galleryCache = [];
             let galleryRoutes = [];
+            let galleryHistory = [];
+            let galleryReconciliation = [];
             let imageNotifications = [];
             try { retryPosition = JSON.parse(sessionStorage.getItem(retryPositionStorageKey) || '[]'); } catch (_) {}
             try { galleryCache = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey) || '[]'); } catch (_) {}
             try { galleryRoutes = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey + '-routes') || '[]'); } catch (_) {}
+            try { galleryHistory = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey + '-history') || '[]'); } catch (_) {}
+            try { galleryReconciliation = JSON.parse(sessionStorage.getItem(galleryCacheTraceKey + '-reconciliation') || '[]'); } catch (_) {}
             try { imageNotifications = JSON.parse(sessionStorage.getItem(imageNotificationTraceKey) || '[]'); } catch (_) {}
             const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(),
-                events: debugEvents, retryPosition, galleryCache, galleryRoutes, imageNotifications }, null, 2)], { type: 'application/json' });
+                events: debugEvents, retryPosition, galleryCache, galleryRoutes, galleryHistory,
+                galleryReconciliation, imageNotifications }, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
@@ -1711,6 +1716,104 @@
         const turnOrderMarker = 'turn-order';
         const observedTurns = new Set();
         let savedOrderSignature = '';
+        let reconciliationSample;
+        let previousReconciliationTrace;
+        function traceReconciliation(event, root, turns, detail = {}) {
+            if (typeof traceGalleryCache === 'undefined' || !traceGalleryCache) return;
+            try {
+                const entry = { event, generation, mountedTurns: turns.map(turnKey), ...detail };
+                const signature = JSON.stringify(entry);
+                if (signature === previousReconciliationTrace) return;
+                previousReconciliationTrace = signature;
+                traceCache('reconciliation', {
+                    ...entry, chat: savedChatId(), top: root?.scrollTop,
+                    height: root?.scrollHeight, viewport: root?.clientHeight,
+                }, galleryCacheTraceKey + '-reconciliation');
+            } catch (_) {} // Diagnostics must not interfere with cleanup.
+        }
+        function removeStaleImages(keys, reason) {
+            if (!keys.length) return;
+            const removed = new Set(keys);
+            for (const key of keys) {
+                const record = records.get(key);
+                if (record?.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
+                records.delete(key);
+            }
+            for (const [direction, key] of knownEnds) if (removed.has(key)) forgetEnd(direction);
+            const selected = imgs[currentIndex];
+            if (overlay && removed.has(imageKeys.get(selected))) clearOverlay();
+            else if (overlay) {
+                imgs = imgs.filter(img => !removed.has(imageKeys.get(img)));
+                currentIndex = imgs.indexOf(selected);
+            }
+            const chat = savedChatId();
+            if (chat) void withDiskCache('readwrite', store => {
+                for (const key of keys) store.delete([chat, key]);
+            });
+            traceCache('reconciled-removal', { chat, reason, keys }, galleryCacheTraceKey + '-history');
+        }
+
+        function reconcileMountedImages(items) {
+            const root = timeline();
+            const turns = Array.from(root?.querySelectorAll(turnSelector) || []);
+            const block = turns[0]?.parentElement?.parentElement;
+            const transcript = transcriptAncestor(block);
+            // Only reconcile a contiguous virtualizer window whose content is settled.
+            if (!transcript ||
+                !root.contains(transcript) || turns.length !== block.children.length ||
+                turns.some((turn, i) => turn.parentElement !== block.children[i] ||
+                    !turn.querySelector('[data-talvt-turn-state="complete"]') ||
+                    turn.querySelector('[data-virtualized-turn-content], [aria-busy="true"], [role="progressbar"], textarea, [contenteditable="true"], [data-testid="image-gen-loading-game-board"], [data-testid="generated-image-preview"]:not(:has(img))')) ||
+                items.some(item => !item.img.complete || !item.img.naturalWidth) || diskLoad?.pending) {
+                if (typeof traceGalleryCache !== 'undefined' && traceGalleryCache) {
+                    traceReconciliation('skipped', root, turns, {
+                        reasons: {
+                            unrecognizedTranscript: !transcript,
+                            transcriptOutsideRoot: !root?.contains(transcript),
+                            rowCountMismatch: turns.length !== block?.children.length,
+                            pendingDiskRestore: !!diskLoad?.pending,
+                        },
+                        turnChecks: turns.map((turn, i) => ({
+                            key: turnKey(turn), rowMismatch: turn.parentElement !== block?.children[i],
+                            complete: !!turn.querySelector('[data-talvt-turn-state="complete"]'),
+                            blockers: ['[data-virtualized-turn-content]', '[aria-busy="true"]', '[role="progressbar"]',
+                                'textarea', '[contenteditable="true"]', '[data-testid="image-gen-loading-game-board"]',
+                                '[data-testid="generated-image-preview"]:not(:has(img))']
+                                .filter(selector => turn.querySelector(selector)),
+                        })),
+                        unloadedImages: items.filter(item => !item.img.complete || !item.img.naturalWidth).map(item => item.key),
+                    });
+                }
+                reconciliationSample = null;
+                return;
+            }
+            const keys = turns.map(turnKey);
+            const signature = JSON.stringify([generation, keys, items.map(item => item.key)]);
+            if (reconciliationSample?.signature !== signature) {
+                reconciliationSample = { signature, since: Date.now() };
+                traceReconciliation('waiting-for-settle', root, turns, { imageKeys: items.map(item => item.key) });
+                setTimeout(scheduleCapture, 600);
+                return;
+            }
+            if (Date.now() - reconciliationSample.since < 500) {
+                traceReconciliation('still-settling', root, turns);
+                return;
+            }
+            const mountedKeys = new Set(keys);
+            const imageSet = new Set(items.map(item => item.key));
+            const ranks = keys.map(key => turnOrder.indexOf(key)).filter(index => index >= 0);
+            const start = mountedTurnBoundary(root, turns.at(-1), -1) ? 0 : Math.min(...ranks);
+            const end = Math.max(...ranks);
+            const covered = new Set(turnOrder.slice(start, end + 1));
+            const stale = [...records.values()].filter(record =>
+                !imageSet.has(record.key) && (mountedKeys.has(record.turn) || covered.has(record.turn)))
+                .map(record => record.key);
+            traceReconciliation('checked', root, turns, {
+                coversChatStart: start === 0, coveredTurns: [...covered], staleKeys: stale,
+                retainedKeys: [...records.keys()].filter(key => !stale.includes(key)),
+            });
+            removeStaleImages(stale, 'settled-transcript-window');
+        }
         function openCacheDatabase() {
             return cacheDatabase ??= new Promise(resolve => {
                 if (typeof indexedDB === 'undefined') { resolve(null); return; }
@@ -1808,6 +1911,15 @@
                 request.onsuccess = () => {
                     load.pending = false;
                     if (epoch !== generation || savedChatId() !== chat) return;
+                    if (typeof traceGalleryCache !== 'undefined' && traceGalleryCache) traceCache('disk-restore', {
+                        chat, orderBeforeRestore: [...turnOrder],
+                        entries: request.result.map(entry => ({
+                            key: entry.key, turn: entry.turn, order: entry.order,
+                            savedAt: entry.savedAt, position: entry.position, turnPosition: entry.turnPosition,
+                            turns: entry.turns, imageKey: entry.imageKey,
+                            alreadyInMemory: records.has(entry.key),
+                        })),
+                    }, galleryCacheTraceKey + '-history');
                     const restoredTurns = new Set();
                     let firstImage;
                     let savedTurns = [];
@@ -1828,7 +1940,8 @@
                         image.alt = 'Chat image';
                         imageKeys.set(image, entry.key);
                         const { key, turn, order, position, pixels, size } = entry;
-                        records.set(key, { key, turn, order, position, pixels, size, image, url });
+                        records.set(key, { key, turn, order, position, pixels, size, image, url,
+                            restoredAt: Date.now(), diskSavedAt: entry.savedAt });
                         bytes += size;
                         if (!turnPositions.has(turn)) turnPositions.set(turn, entry.turnPosition);
                         restoredTurns.add(turn);
@@ -1881,6 +1994,7 @@
         }
 
         function reset(reason = 'conversation-change') {
+            reconciliationSample = null;
             diskLoad = null;
             observedTurns.clear();
             savedOrderSignature = '';
@@ -2064,7 +2178,11 @@
                     const rect = img.getBoundingClientRect();
                     const position = distance - (rect.top + rect.height / 2 - top);
                     const record = records.get(key);
-                    if (record) { record.position = position; record.order = itemOrder; }
+                    if (record) {
+                        record.position = position;
+                        record.order = itemOrder;
+                        if (typeof traceGalleryCache !== 'undefined' && traceGalleryCache) record.lastSeenAt = Date.now();
+                    }
                     result.push({ key, turn: turnKey(turn), order: itemOrder, img, position });
                 }
             }
@@ -2175,7 +2293,8 @@
             log('branch-discarded', { turn: edit.key, turns: removed.size, images: count });
             if (removedRecords) traceCache('branch-discarded', {
                 editedTurn: edit.key, removedTurns: [...removed], removedRecords,
-            });
+                orderUsed: order, retainedKeys: [...records.keys()],
+            }, galleryCacheTraceKey + '-history');
             scheduleCapture();
         }
 
@@ -2217,6 +2336,10 @@
                 imageKeys.set(image, item.key);
                 record = { key: item.key, turn: item.turn, order: item.order, image, url: null, size: 0 };
                 records.set(item.key, record);
+                if (traceGalleryCache) traceCache('discovered', {
+                    chat: savedChatId(), key: item.key, turn: item.turn, order: item.order,
+                    position: item.position, passive: !!session.passive,
+                }, galleryCacheTraceKey + '-history');
             }
             record.order = item.order;
             record.position = item.position;
@@ -2253,7 +2376,8 @@
                         timeout = setTimeout(() => { controller.abort(); reject(new Error('Image timed out')); }, 10000);
                     }),
                 ]);
-                if (epoch !== generation || session.cancelled || conversationId() !== conversation) return;
+                if (epoch !== generation || session.cancelled || conversationId() !== conversation ||
+                    records.get(item.key) !== record) return;
                 if (!blob?.size) throw new Error('Image unavailable');
                 if (bytes - record.size + blob.size > maxBytes) {
                     session.limit = true;
@@ -2267,6 +2391,10 @@
                 bytes += blob.size - record.size;
                 Object.assign(record, { url, size: blob.size, pixels, failed: false });
                 traceCache('stored', { key: item.key, bytes: blob.size, connected: img.isConnected });
+                if (traceGalleryCache) traceCache('captured', {
+                    chat: savedChatId(), key: item.key, passive: !!session.passive,
+                    turnOrder: [...turnOrder], position: item.position,
+                }, galleryCacheTraceKey + '-history');
                 record.image.src = url;
                 record.image.alt = 'Chat image';
                 const chat = savedChatId();
@@ -2303,6 +2431,17 @@
             );
             if (typeof traceGalleryCache !== 'undefined' && traceGalleryCache) traceCache('gallery-list', {
                 keys: ordered.map(item => item.key),
+                firstEntries: ordered.slice(0, 20).map(item => {
+                    const record = records.get(item.key);
+                    return {
+                        key: item.key, turn: item.turn, rank: ranks.get(item.turn), order: item.order,
+                        mounted: current.some(live => live.key === item.key),
+                        cached: !!record?.url, restoredAt: record?.restoredAt,
+                        diskSavedAt: record?.diskSavedAt, lastSeenAt: record?.lastSeenAt,
+                        turnInSavedOrder: observedTurns.has(item.turn),
+                        inclusionReason: record?.url ? 'cached-copy-retained' : 'currently-mounted',
+                    };
+                }),
                 unavailable: [...records.values()].filter(record => !available.has(record.key)).slice(-40)
                     .map(record => ({ key: record.key, pending: !!record.pending, failed: !!record.failed })),
             });
@@ -2577,11 +2716,7 @@
                 }
                 // A full rescan also drops images removed by edits or a branch change.
                 if (completed && !session.timeouts) {
-                    for (const [key, record] of records) {
-                        if (session.seen.has(key)) continue;
-                        if (record.url) { URL.revokeObjectURL(record.url); bytes -= record.size; }
-                        records.delete(key);
-                    }
+                    removeStaleImages([...records.keys()].filter(key => !session.seen.has(key)), 'completed-scan');
                     if ([...session.seen].every((key) => records.get(key)?.url)) {
                         const list = images() || [];
                         if (list.length) {
@@ -2647,8 +2782,8 @@
             const row = turn?.parentElement;
             const block = row?.parentElement;
             const extent = block?.parentElement;
-            const transcript = extent?.parentElement;
-            if (!transcript?.matches('[data-chatgpt-conversation-selection-target]') ||
+            const transcript = transcriptAncestor(extent);
+            if (!transcript ||
                 !root.contains(transcript) || !extent.style.height || !block.style.marginTop) return false;
             const turns = Array.from(block.querySelectorAll(turnSelector));
             const index = turns.indexOf(turn);
@@ -2660,8 +2795,10 @@
             if (direction < 0) {
                 if (Math.abs(mountedBounds.top - bounds.top) > 2) return false;
                 // The pagination indicator sits before the extent, outside the turns.
+                let section = extent;
+                while (section.parentElement !== transcript) section = section.parentElement;
                 for (const sibling of transcript.children) {
-                    if (sibling === extent) break;
+                    if (sibling === section) break;
                     if (!sibling.hidden && sibling.getBoundingClientRect().height > 0) return false;
                 }
             } else if (Math.abs(mountedBounds.bottom - bounds.bottom) > 2) return false;
@@ -2670,6 +2807,15 @@
                 node.querySelector('[data-virtualized-turn-content], [aria-busy="true"], [role="progressbar"], ' +
                     '[data-testid="generated-image-preview"]:not(:has(img))'))) return false;
             return true;
+        }
+
+        function transcriptAncestor(node) {
+            for (let ancestor = node?.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                if (ancestor.matches?.('[data-chatgpt-conversation-selection-target], [data-rail-chat-transcript], [data-thread-find-target="conversation"]')) {
+                    return ancestor;
+                }
+            }
+            return null;
         }
 
         async function findNext(selected, direction, isCurrent) {
@@ -2814,6 +2960,7 @@
                 return;
             }
             const items = mounted();
+            reconcileMountedImages(items);
             if (traceGalleryCache) {
                 const root = observedRoot;
                 const accepted = new Set(items.map(item => item.img));
