@@ -19,6 +19,7 @@ function setup(localStorage, sessionStorage) {
   const strip = { querySelectorAll: () => buttons, querySelector: () => buttons.includes(selected) ? selected : null };
   const context = {
     location: { pathname: '/imagine/post/example', origin: 'https://grok.com' }, isGrokHost: () => true,
+    isChatGPTHost: () => false,
     URL, URLSearchParams, localStorage, sessionStorage,
     pickBestVisibleVideo: () => null,
     document: { querySelector: () => stripPresent ? strip : null, querySelectorAll: () => [] },

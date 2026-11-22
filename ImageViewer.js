@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ImageViewer
 // @namespace    http://example.com/
-// @version      2.52
+// @version      2.53
 // @updateURL    https://raw.githubusercontent.com/Hohol/ImageViewer/main/ImageViewer.js
 // @downloadURL  https://raw.githubusercontent.com/Hohol/ImageViewer/main/ImageViewer.js
 // @description  Improves image and video UI on ChatGPT, Gemini, and Grok; browses local images in Chrome.
@@ -4219,6 +4219,7 @@
                 ['R', 'Random image (outside Imagine)'],
                 ['T', 'Open image in new tab (page or gallery)'],
                 ['C', 'Copy image or current video frame'],
+                ['J', 'Open random project (ChatGPT)'],
             ],
         },
         {
@@ -7551,6 +7552,26 @@
             } else {
                 if (button._ivGrokDeleteToast) hideViewerToast(button._ivGrokDeleteToast);
                 delete button._ivGrokDeleteToast;
+            }
+            return;
+        }
+
+        // J: random ChatGPT project, or a cached Grok post below.
+        if (e.code === 'KeyJ' && isChatGPTHost()) {
+            if (e.metaKey || e.ctrlKey || e.altKey || isKeyboardTypingTarget(e.target)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (!e.repeat) {
+                const projects = [
+                    'https://chatgpt.com/g/g-p-6aeb08436a188191a3a0a7646e1a3461/project',
+                    'https://chatgpt.com/g/g-p-6acab06bcca0819191474333ff0a6696/project',
+                    'https://chatgpt.com/g/g-p-6a8bced6980c819195c02dc2be81172e/project',
+                    'https://chatgpt.com/g/g-p-6a550218cce88191ad10e994bac18071/project',
+                    'https://chatgpt.com/g/g-p-6a44d64781488191b1b46017722206c1/project',
+                    'https://chatgpt.com/g/g-p-6a3a076b41c08191a430b2c17ca83528/project',
+                    'https://chatgpt.com/g/g-p-6a1a115aaec08191a746c833690b1ecc/project',
+                ];
+                location.assign(projects[Math.floor(Math.random() * projects.length)]);
             }
             return;
         }
