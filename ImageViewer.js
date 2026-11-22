@@ -528,6 +528,71 @@
         return h === 'chatgpt.com' || h.endsWith('.chatgpt.com');
     }
 
+    function initChatGPTProjectChatLinks() {
+        if (!isChatGPTHost()) return;
+        const rowSelector = '[data-app-action-sidebar-project-id]';
+        const buttonSelector = 'button[aria-label^="New chat in "]';
+        const links = new WeakMap();
+        let pending = false;
+
+        function sync() {
+            pending = false;
+            document.querySelectorAll(rowSelector).forEach((row) => {
+                const projectId = row.getAttribute('data-app-action-sidebar-project-id');
+                if (!/^g-p-[a-z0-9-]+$/i.test(projectId || '')) return;
+                row.querySelectorAll(buttonSelector).forEach((button) => {
+                    const parent = button.parentElement;
+                    let link = links.get(button);
+                    if (!link || link.parentElement !== parent) {
+                        // Keep React's button in place and overlay a sibling link.
+                        // Its tooltip wrapper already follows the button's hover visibility.
+                        parent.querySelectorAll(':scope > a[data-iv-project-chat-link]').forEach((old) => old.remove());
+                        if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+                        link = document.createElement('a');
+                        link.setAttribute('data-iv-project-chat-link', '');
+                        link.style.cssText = 'position:absolute;inset:0;display:block;border-radius:inherit;';
+                        link.addEventListener('click', (event) => {
+                            event.stopPropagation();
+                            if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
+                                event.preventDefault();
+                            } else if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                                // Preserve native SPA navigation and composer focus.
+                                event.preventDefault();
+                                button.click();
+                            }
+                        });
+                        for (const type of ['auxclick', 'contextmenu', 'keydown', 'keyup']) {
+                            link.addEventListener(type, (event) => event.stopPropagation());
+                        }
+                        parent.appendChild(link);
+                        links.set(button, link);
+                    }
+                    const disabled = button.disabled || button.getAttribute('aria-disabled') === 'true';
+                    const href = `/g/${projectId}/project`;
+                    const label = button.getAttribute('aria-label');
+                    if (disabled) link.removeAttribute('href');
+                    else if (link.getAttribute('href') !== href) link.setAttribute('href', href);
+                    if (link.getAttribute('aria-label') !== label) link.setAttribute('aria-label', label);
+                    if (link.getAttribute('aria-disabled') !== String(disabled)) link.setAttribute('aria-disabled', String(disabled));
+                    link.tabIndex = disabled ? -1 : 0;
+                    button.tabIndex = -1;
+                    button.setAttribute('aria-hidden', 'true');
+                });
+            });
+        }
+
+        const observer = new MutationObserver(() => {
+            if (pending) return;
+            pending = true;
+            requestAnimationFrame(sync);
+        });
+        observer.observe(document.body, {
+            childList: true, subtree: true, attributes: true,
+            attributeFilter: ['data-app-action-sidebar-project-id', 'aria-label', 'disabled', 'aria-disabled'],
+        });
+        sync();
+    }
+
     /** Temporary diagnostics: set false after investigating ChatGPT's virtualized timeline. */
     const IV_CHATGPT_NAVIGATION_DEBUG = false;
 
@@ -7693,6 +7758,7 @@
         handleViewerKeydown(e);
         if (!e.cancelBubble && !e.isComposing && e.keyCode !== 229) handleOverlayKeydown(e);
     };
+    initChatGPTProjectChatLinks();
     ivChatGPTNavigationDebug = createChatGPTNavigationDebug();
     ivChatGPTGallery = createChatGPTGallery(() => !!ivChatGPTControls?.active);
     ivChatGPTControls = createChatGPTControls();
